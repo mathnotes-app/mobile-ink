@@ -6,7 +6,7 @@ Production-grade React Native ink primitives extracted from the MathNotes canvas
   <a href="https://www.npmjs.com/package/@mathnotes/mobile-ink"><img src="https://img.shields.io/npm/v/@mathnotes/mobile-ink.svg" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/@mathnotes/mobile-ink"><img src="https://img.shields.io/npm/dm/@mathnotes/mobile-ink.svg" alt="npm downloads" /></a>
   <a href="https://github.com/mathnotes-app/mobile-ink/actions/workflows/ci.yml"><img src="https://github.com/mathnotes-app/mobile-ink/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
-  <a href="https://github.com/mobile-ink/mobile-ink/releases/tag/v0.2.0"><img src="https://img.shields.io/github/v/release/mobile-ink/mobile-ink" alt="GitHub release" /></a>
+  <a href="https://github.com/mathnotes-app/mobile-ink/releases/latest"><img src="https://img.shields.io/github/v/release/mathnotes-app/mobile-ink" alt="GitHub release" /></a>
   <a href="https://github.com/mathnotes-app/mobile-ink/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@mathnotes/mobile-ink.svg" alt="license" /></a>
 </p>
 
@@ -37,7 +37,7 @@ mobile-ink is currently used in production in MathNotes: https://apps.apple.com/
 | Area | Current support |
 | --- | --- |
 | iOS Apple Pencil drawing | Used in production |
-| Native rendering | Custom iOS `MTKView` and Android `TextureView` backed by the shared C++ Skia engine |
+| Native rendering | Custom iOS `MTKView` and Android `TextureView` backed by the shared C++ Skia engine, with cached high-resolution settled zoom rendering |
 | Continuous notebooks | Fixed native engine pool with momentum scroll and pinch zoom |
 | Tools | Pen, highlighter, crayon, calligraphy, eraser, selection, and shape recognition |
 | Serialization | JSON notebook payloads plus native page load/save/export helpers |
@@ -174,7 +174,6 @@ Near-term work is focused on making the public package easier to adopt and easie
 - Improve install and troubleshooting docs for React Native and Expo dev-client apps.
 - Add more integration recipes for save/load, tool switching, and app-owned storage.
 - Tighten selection transform performance for large stroke groups.
-- Improve edge-case zoom behavior near page and canvas boundaries.
 - Continue hardening the example app as a small regression harness.
 - Add the Android native benchmark runner and expose Android benchmark controls in the example app.
 
