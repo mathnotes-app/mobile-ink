@@ -97,7 +97,11 @@ const defaultToolState: ContinuousEnginePoolToolState = {
 };
 
 const defaultProps = {
+  pageWidth: 600,
   canvasHeight: 800,
+  contentPadding: 0,
+  viewportTransform: null,
+  renderScale: 1,
   backgroundType: "regular",
   pdfBackgroundBaseUri: undefined,
   fingerDrawingEnabled: true,
@@ -299,6 +303,32 @@ describe("ContinuousEnginePool", () => {
     expect(StyleSheet.flatten(hiddenSecondSlot.props.style)).toEqual(
       expect.objectContaining({ top: -100000, height: 800, opacity: 0 }),
     );
+  });
+
+  it("forwards center-origin visible viewport ratios to native canvases", async () => {
+    const pages = [page(0), page(1), page(2)];
+    const { poolRef } = renderPool({
+      viewportTransform: {
+        scale: 2,
+        translateX: 0,
+        translateY: 0,
+        containerWidth: 400,
+        containerHeight: 400,
+      },
+      renderScale: 2,
+    });
+
+    await act(async () => {});
+    await assignPages(poolRef, buildAssignments(pages, 0));
+
+    const [firstSlotProps] = mockNativeCanvasProps.slice(-3);
+    expect(firstSlotProps).toEqual(expect.objectContaining({
+      renderScale: 2,
+      renderViewportLeftRatio: 100 / 600,
+      renderViewportTopRatio: 100 / 800,
+      renderViewportWidthRatio: 200 / 600,
+      renderViewportHeightRatio: 200 / 800,
+    }));
   });
 
   it("forwards pencil double-tap events to every pooled native canvas", async () => {

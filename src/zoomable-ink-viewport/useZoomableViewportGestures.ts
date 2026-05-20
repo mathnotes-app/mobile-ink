@@ -186,6 +186,18 @@ export const useZoomableViewportGestures = ({
     savedTranslateY.value = translateY.value;
   };
 
+  const flushTransformChange = () => {
+    "worklet";
+    lastTransformNotificationTs.value = Date.now();
+    runOnJS(notifyTransformChange)(
+      scale.value,
+      translateX.value,
+      translateY.value,
+      containerWidth.value,
+      containerHeight.value
+    );
+  };
+
   const syncMotionState = () => {
     "worklet";
     const nextIsMoving =
@@ -200,6 +212,9 @@ export const useZoomableViewportGestures = ({
     }
 
     isMotionActive.value = nextIsMoving;
+    if (!nextIsMoving) {
+      flushTransformChange();
+    }
     runOnJS(notifyMotionChange)(nextIsMoving);
   };
 
@@ -381,7 +396,7 @@ export const useZoomableViewportGestures = ({
           syncMotionState();
         }
       });
-  }, [enabled, minScale, maxScale, onZoomChange, notifyGestureStart, notifyGestureEnd, notifyMotionChange]);
+  }, [enabled, minScale, maxScale, onZoomChange, notifyGestureStart, notifyGestureEnd, notifyMotionChange, notifyTransformChange]);
 
   const panGesture = useMemo(() => {
     const gesture = Gesture.Pan()
@@ -615,7 +630,7 @@ export const useZoomableViewportGestures = ({
       });
 
     return gesture;
-  }, [enableMomentumScroll, enabled, fingerDrawingEnabled, edgeExclusionWidth, notifyGestureStart, notifyGestureEnd, notifyMotionChange, panEnabled]);
+  }, [enableMomentumScroll, enabled, fingerDrawingEnabled, edgeExclusionWidth, notifyGestureStart, notifyGestureEnd, notifyMotionChange, notifyTransformChange, panEnabled]);
 
   const tapGesture = useMemo(() => {
     return Gesture.Tap()

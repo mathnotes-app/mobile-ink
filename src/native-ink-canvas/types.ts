@@ -18,6 +18,13 @@ export interface NativeInkCanvasProps {
   renderSuspended?: boolean;
   /** iOS only: Chooses the native render path for A/B performance tests. */
   renderBackend?: NativeInkRenderBackend;
+  /** Native raster scale bucket used to keep ink sharp after zoom settles. */
+  renderScale?: number;
+  /** Visible page rect, expressed as normalized page-space ratios. */
+  renderViewportLeftRatio?: number;
+  renderViewportTopRatio?: number;
+  renderViewportWidthRatio?: number;
+  renderViewportHeightRatio?: number;
   /** iOS only: Controls whether fingers or only Apple Pencil can draw */
   drawingPolicy?: "default" | "anyinput" | "pencilonly";
   /** iOS only: Fired when Apple Pencil barrel is double-tapped (2nd gen+) */

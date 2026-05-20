@@ -26,8 +26,10 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     private val stylusPressureExponent: Float = 0.88f
 
     @Volatile private var drawingEngine: Long = 0
-    @Volatile private var viewWidth: Int = 0
-    @Volatile private var viewHeight: Int = 0
+    @Volatile private var renderWidth: Int = 0
+    @Volatile private var renderHeight: Int = 0
+    private var logicalWidth: Int = 0
+    private var logicalHeight: Int = 0
     private var engineWidth: Int = 0
     private var engineHeight: Int = 0
     private var nativeLibraryAvailable: Boolean = false
@@ -70,6 +72,43 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     // When "pencilonly", only stylus touches are processed for drawing
     var drawingPolicy: String = "default"
     var renderBackend: String = "ganesh"
+    var renderScale: Float = 1f
+        set(value) {
+            val clamped = value.takeIf { it.isFinite() }?.coerceIn(1f, 5f) ?: 1f
+            if (field == clamped) return
+            field = clamped
+            surfaceTexture?.let { texture ->
+                if (isAvailable) {
+                    configureAvailableTexture(texture, width, height)
+                }
+            }
+            applyRenderViewport()
+            requestInkRender(force = true)
+        }
+    var renderViewportLeftRatio: Float = 0f
+        set(value) {
+            field = value.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f
+            applyRenderViewport()
+            requestInkRender(force = true)
+        }
+    var renderViewportTopRatio: Float = 0f
+        set(value) {
+            field = value.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f
+            applyRenderViewport()
+            requestInkRender(force = true)
+        }
+    var renderViewportWidthRatio: Float = 1f
+        set(value) {
+            field = value.takeIf { it.isFinite() }?.coerceIn(0.001f, 1f) ?: 1f
+            applyRenderViewport()
+            requestInkRender(force = true)
+        }
+    var renderViewportHeightRatio: Float = 1f
+        set(value) {
+            field = value.takeIf { it.isFinite() }?.coerceIn(0.001f, 1f) ?: 1f
+            applyRenderViewport()
+            requestInkRender(force = true)
+        }
     var renderSuspended: Boolean = false
         set(value) {
             if (field == value) return
@@ -120,7 +159,9 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
             return
         }
 
-        surfaceTexture.setDefaultBufferSize(width, height)
+        val targetWidth = maxOf(1, kotlin.math.ceil(width * renderScale).toInt())
+        val targetHeight = maxOf(1, kotlin.math.ceil(height * renderScale).toInt())
+        surfaceTexture.setDefaultBufferSize(targetWidth, targetHeight)
         queueEvent {
             if (
                 !surfaceReady ||
@@ -128,17 +169,26 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
                 eglContext == EGL14.EGL_NO_CONTEXT ||
                 eglSurface == EGL14.EGL_NO_SURFACE
             ) {
-                createRenderSurface(surfaceTexture, width, height)
+                createRenderSurface(surfaceTexture, width, height, targetWidth, targetHeight)
+            } else if (targetWidth != renderWidth || targetHeight != renderHeight) {
+                createRenderSurface(surfaceTexture, width, height, targetWidth, targetHeight)
             } else if (makeRenderContextCurrent()) {
-                configureSurfaceSize(width, height)
+                configureSurfaceSize(width, height, targetWidth, targetHeight)
                 renderFrame()
             }
         }
     }
 
-    private fun configureSurfaceSize(width: Int, height: Int) {
-        viewWidth = width
-        viewHeight = height
+    private fun configureSurfaceSize(
+        width: Int,
+        height: Int,
+        targetWidth: Int = maxOf(1, kotlin.math.ceil(width * renderScale).toInt()),
+        targetHeight: Int = maxOf(1, kotlin.math.ceil(height * renderScale).toInt()),
+    ) {
+        logicalWidth = width
+        logicalHeight = height
+        renderWidth = targetWidth
+        renderHeight = targetHeight
 
         if (width <= 0 || height <= 0) {
             return
@@ -151,6 +201,8 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         val shouldPreserveDrawing = drawingEngine != 0L
         if (drawingEngine == 0L || engineWidth != width || engineHeight != height) {
             configureDrawingEngine(width, height, shouldPreserveDrawing)
+        } else {
+            applyRenderViewport()
         }
 
         // Re-apply PDF background if we have one (needs to be re-rendered at new size)
@@ -159,8 +211,14 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         }
     }
 
-    private fun createRenderSurface(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
-        if (width <= 0 || height <= 0) {
+    private fun createRenderSurface(
+        surfaceTexture: SurfaceTexture,
+        width: Int,
+        height: Int,
+        targetWidth: Int,
+        targetHeight: Int,
+    ) {
+        if (width <= 0 || height <= 0 || targetWidth <= 0 || targetHeight <= 0) {
             return
         }
 
@@ -248,7 +306,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         }
 
         surfaceReady = true
-        configureSurfaceSize(width, height)
+        configureSurfaceSize(width, height, targetWidth, targetHeight)
         renderFrame()
     }
 
@@ -327,9 +385,11 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
 
         setBackgroundType(drawingEngine, currentBackgroundType)
         applyCurrentToolToEngine(drawingEngine)
+        applyRenderViewport()
 
         if (preservedDrawing != null && preservedDrawing.isNotEmpty()) {
             deserializeDrawing(drawingEngine, preservedDrawing)
+            applyRenderViewport()
         }
 
         resetTransientInteractionState()
@@ -338,15 +398,48 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
 
     private fun renderFrame() {
         val engine = drawingEngine
-        if (!surfaceReady || engine == 0L || viewWidth <= 0 || viewHeight <= 0) {
+        if (!surfaceReady || engine == 0L || renderWidth <= 0 || renderHeight <= 0) {
             return
         }
         if (!makeRenderContextCurrent()) {
             return
         }
-        if (renderGaneshToCurrentSurface(engine, viewWidth, viewHeight)) {
+        if (renderGaneshToCurrentSurface(engine, renderWidth, renderHeight)) {
             EGL14.eglSwapBuffers(eglDisplay, eglSurface)
         }
+    }
+
+    private fun applyRenderViewport() {
+        val engine = drawingEngine
+        if (engine == 0L || engineWidth <= 0 || engineHeight <= 0) {
+            return
+        }
+
+        val left = renderViewportLeftRatio.coerceIn(0f, 1f) * engineWidth
+        val top = renderViewportTopRatio.coerceIn(0f, 1f) * engineHeight
+        val viewportWidth = minOf(
+            engineWidth.toFloat() - left,
+            renderViewportWidthRatio.coerceIn(0.001f, 1f) * engineWidth
+        )
+        val viewportHeight = minOf(
+            engineHeight.toFloat() - top,
+            renderViewportHeightRatio.coerceIn(0.001f, 1f) * engineHeight
+        )
+
+        val actualRenderScale = if (renderWidth > 0 && engineWidth > 0) {
+            (renderWidth.toFloat() / engineWidth.toFloat()).coerceIn(1f, 5f)
+        } else {
+            renderScale.coerceIn(1f, 5f)
+        }
+
+        setRenderViewport(
+            engine,
+            actualRenderScale,
+            left,
+            top,
+            maxOf(1f, viewportWidth),
+            maxOf(1f, viewportHeight)
+        )
     }
 
     private fun ensureRenderHandler(): Handler {
@@ -421,7 +514,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
 
         // Load PDF and render to bitmap on background thread
         Thread {
-            val pdfBitmap = PdfLoader.loadAndRenderPdf(context, uri, viewWidth, viewHeight)
+            val pdfBitmap = PdfLoader.loadAndRenderPdf(context, uri, logicalWidth, logicalHeight)
             if (pdfBitmap != null) {
                 queueEvent {
                     if (drawingEngine != 0L) {
@@ -1197,12 +1290,12 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     }
 
     fun getBase64PngData(scale: Float): String? {
-        if (drawingEngine == 0L || viewWidth == 0 || viewHeight == 0) return null
+        if (drawingEngine == 0L || logicalWidth == 0 || logicalHeight == 0) return null
         return runOnGlThreadSync { exportToBase64(scale, Bitmap.CompressFormat.PNG, 100) }
     }
 
     fun getBase64JpegData(scale: Float, compression: Float): String? {
-        if (drawingEngine == 0L || viewWidth == 0 || viewHeight == 0) return null
+        if (drawingEngine == 0L || logicalWidth == 0 || logicalHeight == 0) return null
         val quality = (compression * 100).toInt().coerceIn(0, 100)
         return runOnGlThreadSync { exportToBase64(scale, Bitmap.CompressFormat.JPEG, quality) }
     }
@@ -1210,8 +1303,8 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     private fun exportToBase64(scale: Float, format: Bitmap.CompressFormat, quality: Int): String? {
         return try {
             val actualScale = if (scale > 0f) scale else resources.displayMetrics.density
-            val width = (viewWidth * actualScale).toInt().coerceAtLeast(1)
-            val height = (viewHeight * actualScale).toInt().coerceAtLeast(1)
+            val width = (logicalWidth * actualScale).toInt().coerceAtLeast(1)
+            val height = (logicalHeight * actualScale).toInt().coerceAtLeast(1)
             val finalBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             if (drawingEngine != 0L) renderToPixelsScaled(drawingEngine, finalBitmap, actualScale)
 
@@ -1262,6 +1355,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     // Native method declarations
     private external fun createDrawingEngine(width: Int, height: Int): Long
     private external fun destroyDrawingEngine(engine: Long)
+    private external fun setRenderViewport(engine: Long, renderScale: Float, visibleLeft: Float, visibleTop: Float, visibleWidth: Float, visibleHeight: Float)
 
     // Touch handling with full stylus support
     private external fun touchBegan(engine: Long, x: Float, y: Float, pressure: Float, azimuth: Float, altitude: Float, timestamp: Long, isStylusInput: Boolean)

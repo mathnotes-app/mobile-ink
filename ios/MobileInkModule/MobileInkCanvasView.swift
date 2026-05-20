@@ -69,11 +69,15 @@ class MobileInkCanvasView: MTKView {
     var scaleY: CGFloat = 1.0
   private var pixelBuffer: UnsafeMutablePointer<UInt8>?
   private var pixelBufferLength: Int = 0
-  private var pixelBytesPerRow: Int = 0
+    private var pixelBytesPerRow: Int = 0
   var pixelWidth: Int32 = 0
   var pixelHeight: Int32 = 0
     private var enginePixelWidth: Int32 = 0
     private var enginePixelHeight: Int32 = 0
+    private var isApplyingDrawableSize = false
+    private var clampedRenderScale: CGFloat {
+        max(1.0, min(5.0, renderScale.isFinite ? renderScale : 1.0))
+    }
 
     // Store pending tool settings to apply when engine is ready
     private var pendingTool: String = "pen"
@@ -135,6 +139,25 @@ class MobileInkCanvasView: MTKView {
             }
         }
     }
+    @objc var renderScale: CGFloat = 1.0 {
+        didSet {
+            applyDrawableContentScale(updateDrawableSize: true)
+            applyRenderViewportToEngine()
+            requestDisplay(forceWhenSuspended: true)
+        }
+    }
+    @objc var renderViewportLeftRatio: CGFloat = 0.0 {
+        didSet { applyRenderViewportToEngine(); requestDisplay(forceWhenSuspended: true) }
+    }
+    @objc var renderViewportTopRatio: CGFloat = 0.0 {
+        didSet { applyRenderViewportToEngine(); requestDisplay(forceWhenSuspended: true) }
+    }
+    @objc var renderViewportWidthRatio: CGFloat = 1.0 {
+        didSet { applyRenderViewportToEngine(); requestDisplay(forceWhenSuspended: true) }
+    }
+    @objc var renderViewportHeightRatio: CGFloat = 1.0 {
+        didSet { applyRenderViewportToEngine(); requestDisplay(forceWhenSuspended: true) }
+    }
 
     @objc var onDrawingChange: RCTDirectEventBlock?
     @objc var onDrawingBegin: RCTDirectEventBlock?
@@ -175,8 +198,7 @@ class MobileInkCanvasView: MTKView {
         self.colorPixelFormat = .bgra8Unorm
         self.clearColor = MTLClearColorMake(0, 0, 0, 0) // Transparent
 
-        // Disable automatic resize to have more control
-        self.autoResizeDrawable = true
+        self.autoResizeDrawable = false
 
         // Configure Metal layer for transparency and low latency
         if let metalLayer = self.layer as? CAMetalLayer {
@@ -341,7 +363,66 @@ class MobileInkCanvasView: MTKView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        applyDrawableContentScale(updateDrawableSize: true)
+        applyRenderViewportToEngine()
         updateSelectionToolbarFrame()
+    }
+
+    private func baseContentScale() -> CGFloat {
+        window?.screen.scale ?? UIScreen.main.scale
+    }
+
+    private func applyDrawableContentScale(updateDrawableSize: Bool) {
+        let targetScale = baseContentScale() * clampedRenderScale
+        if abs(contentScaleFactor - targetScale) > 0.001 {
+            contentScaleFactor = targetScale
+        }
+        if abs(layer.contentsScale - targetScale) > 0.001 {
+            layer.contentsScale = targetScale
+        }
+        guard updateDrawableSize, !isApplyingDrawableSize, bounds.width > 0, bounds.height > 0 else {
+            return
+        }
+
+        let targetDrawableSize = CGSize(
+            width: max(1.0, round(bounds.width * targetScale)),
+            height: max(1.0, round(bounds.height * targetScale))
+        )
+        if abs(drawableSize.width - targetDrawableSize.width) > 0.5 ||
+            abs(drawableSize.height - targetDrawableSize.height) > 0.5 {
+            isApplyingDrawableSize = true
+            defer { isApplyingDrawableSize = false }
+            drawableSize = targetDrawableSize
+        }
+    }
+
+    private func applyRenderViewportToEngine() {
+        guard let engine = drawingEngine, enginePixelWidth > 0, enginePixelHeight > 0 else {
+            return
+        }
+
+        let actualScaleX = pixelWidth > 0
+            ? CGFloat(pixelWidth) / CGFloat(enginePixelWidth)
+            : clampedRenderScale
+        let actualRenderScale = max(
+            1.0,
+            min(5.0, actualScaleX.isFinite ? actualScaleX : clampedRenderScale)
+        )
+        let left = max(0.0, min(1.0, renderViewportLeftRatio)) * CGFloat(enginePixelWidth)
+        let top = max(0.0, min(1.0, renderViewportTopRatio)) * CGFloat(enginePixelHeight)
+        let widthRatio = max(0.001, min(1.0, renderViewportWidthRatio))
+        let heightRatio = max(0.001, min(1.0, renderViewportHeightRatio))
+        let width = min(CGFloat(enginePixelWidth) - left, widthRatio * CGFloat(enginePixelWidth))
+        let height = min(CGFloat(enginePixelHeight) - top, heightRatio * CGFloat(enginePixelHeight))
+
+        setRenderViewport(
+            engine,
+            Float(actualRenderScale),
+            Float(left),
+            Float(top),
+            Float(max(1.0, width)),
+            Float(max(1.0, height))
+        )
     }
 
     func requestDisplay(forceWhenSuspended: Bool = false) {
@@ -1504,6 +1585,7 @@ class MobileInkCanvasView: MTKView {
         }
 
         applyPendingBackgroundType(to: engine)
+        applyRenderViewportToEngine()
 
         if let preservedDrawingData, !preservedDrawingData.isEmpty {
             if !restoreRawDrawingData(preservedDrawingData, into: engine) {
@@ -1518,6 +1600,7 @@ class MobileInkCanvasView: MTKView {
             resetTransientInteractionState()
             applyPendingTool(to: engine)
             notifySelectionChange()
+            applyRenderViewportToEngine()
             requestDisplay(forceWhenSuspended: true)
         }
     }
@@ -1599,10 +1682,22 @@ extension MobileInkCanvasView: MTKViewDelegate {
             pageHeight = pageWidth * (11.0 / 8.5) // US Letter aspect ratio
         }
 
-        // Calculate scale from view bounds to drawable (pixel) coordinates for touch input
+        applyDrawableContentScale(updateDrawableSize: false)
+
+        // Calculate scale from view bounds to the stable document-pixel
+        // coordinate system. The drawable may be larger at high zoom, but
+        // touches must remain in the same persisted stroke coordinates.
+        let baseScale = baseContentScale()
+        let nextEnginePixelWidth: Int32
+        let nextEnginePixelHeight: Int32
         if bounds.width > 0 && bounds.height > 0 {
-            scaleX = size.width / bounds.width
-            scaleY = size.height / bounds.height
+            scaleX = baseScale
+            scaleY = baseScale
+            nextEnginePixelWidth = Int32(max(1, round(bounds.width * baseScale)))
+            nextEnginePixelHeight = Int32(max(1, round(bounds.height * baseScale)))
+        } else {
+            nextEnginePixelWidth = 0
+            nextEnginePixelHeight = 0
         }
 
         if size.width > 0 && size.height > 0 {
@@ -1618,21 +1713,23 @@ extension MobileInkCanvasView: MTKViewDelegate {
             }
         }
 
-        if pixelWidth > 0 && pixelHeight > 0 {
+        if nextEnginePixelWidth > 0 && nextEnginePixelHeight > 0 {
             if drawingEngine == nil {
                 configureDrawingEngine(
-                    width: pixelWidth,
-                    height: pixelHeight,
+                    width: nextEnginePixelWidth,
+                    height: nextEnginePixelHeight,
                     preserveExistingDrawing: false
                 )
                 print("✅ Drawing engine created with size: \(pixelWidth)x\(pixelHeight) (page: \(pageWidth)x\(pageHeight))")
-            } else if enginePixelWidth != pixelWidth || enginePixelHeight != pixelHeight {
+            } else if enginePixelWidth != nextEnginePixelWidth || enginePixelHeight != nextEnginePixelHeight {
                 configureDrawingEngine(
-                    width: pixelWidth,
-                    height: pixelHeight,
+                    width: nextEnginePixelWidth,
+                    height: nextEnginePixelHeight,
                     preserveExistingDrawing: true
                 )
                 print("✅ Drawing engine resized to: \(pixelWidth)x\(pixelHeight) (page: \(pageWidth)x\(pageHeight))")
+            } else {
+                applyRenderViewportToEngine()
             }
         }
 

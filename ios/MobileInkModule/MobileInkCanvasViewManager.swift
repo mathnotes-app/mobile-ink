@@ -89,6 +89,28 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
     }
   }
 
+  @objc var renderScale: CGFloat = 1.0 {
+    didSet {
+      drawingView?.renderScale = renderScale
+    }
+  }
+
+  @objc var renderViewportLeftRatio: CGFloat = 0.0 {
+    didSet { drawingView?.renderViewportLeftRatio = renderViewportLeftRatio }
+  }
+
+  @objc var renderViewportTopRatio: CGFloat = 0.0 {
+    didSet { drawingView?.renderViewportTopRatio = renderViewportTopRatio }
+  }
+
+  @objc var renderViewportWidthRatio: CGFloat = 1.0 {
+    didSet { drawingView?.renderViewportWidthRatio = renderViewportWidthRatio }
+  }
+
+  @objc var renderViewportHeightRatio: CGFloat = 1.0 {
+    didSet { drawingView?.renderViewportHeightRatio = renderViewportHeightRatio }
+  }
+
   // Drawing policy - controls whether fingers or only Apple Pencil can draw
   @objc var drawingPolicy: String? {
     didSet {
@@ -124,6 +146,11 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
     if let backend = renderBackend {
       view.renderBackend = backend
     }
+    view.renderScale = renderScale
+    view.renderViewportLeftRatio = renderViewportLeftRatio
+    view.renderViewportTopRatio = renderViewportTopRatio
+    view.renderViewportWidthRatio = renderViewportWidthRatio
+    view.renderViewportHeightRatio = renderViewportHeightRatio
     view.renderSuspended = renderSuspended
   }
 

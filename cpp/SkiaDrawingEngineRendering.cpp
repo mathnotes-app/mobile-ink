@@ -19,6 +19,11 @@ namespace nativedrawing {
 
 namespace {
 
+constexpr int kStrokeTileSize = 512;
+constexpr size_t kMaxStrokeTileCacheBytes = 96 * 1024 * 1024;
+constexpr float kMinimumRenderScale = 1.0f;
+constexpr float kMaximumRenderScale = 5.0f;
+
 SkColor swapRedBlueChannels(SkColor color) {
     return SkColorSetARGB(
         SkColorGetA(color),
@@ -38,7 +43,89 @@ void normalizeStrokeColorsForRasterExport(std::vector<Stroke>& strokes) {
     }
 }
 
+int renderScaleBucket(float scale) {
+    const float clamped = std::max(kMinimumRenderScale, std::min(kMaximumRenderScale, scale));
+    const float buckets[] = {1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f, 5.0f};
+    float bestBucket = buckets[0];
+    float bestDistance = std::fabs(clamped - bestBucket);
+    for (float bucket : buckets) {
+        const float distance = std::fabs(clamped - bucket);
+        if (distance < bestDistance) {
+            bestBucket = bucket;
+            bestDistance = distance;
+        }
+    }
+    return static_cast<int>(std::round(bestBucket * 100.0f));
+}
+
 }  // namespace
+
+void SkiaDrawingEngine::setRenderViewport(
+    float renderScale,
+    float visibleLeft,
+    float visibleTop,
+    float visibleWidth,
+    float visibleHeight
+) {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+
+    const float clampedScale = std::max(kMinimumRenderScale, std::min(kMaximumRenderScale, renderScale));
+    renderScale_ = static_cast<float>(renderScaleBucket(clampedScale)) / 100.0f;
+    visibleLeft_ = std::max(0.0f, std::min(static_cast<float>(width_), visibleLeft));
+    visibleTop_ = std::max(0.0f, std::min(static_cast<float>(height_), visibleTop));
+    visibleWidth_ = std::max(1.0f, std::min(static_cast<float>(width_) - visibleLeft_, visibleWidth));
+    visibleHeight_ = std::max(1.0f, std::min(static_cast<float>(height_) - visibleTop_, visibleHeight));
+}
+
+void SkiaDrawingEngine::markStrokeCachesDirty() {
+    needsStrokeRedraw_ = true;
+    strokeTileEpoch_++;
+    if (strokeTileEpoch_ == 0) {
+        strokeTileEpoch_ = 1;
+        strokeTileCache_.clear();
+        strokeTileCacheBytes_ = 0;
+    }
+}
+
+void SkiaDrawingEngine::invalidateStrokeTilesForRect(const SkRect& bounds) {
+    if (strokeTileCache_.empty() || bounds.isEmpty()) {
+        return;
+    }
+
+    const float expandedLeft = std::max(0.0f, bounds.left());
+    const float expandedTop = std::max(0.0f, bounds.top());
+    const float expandedRight = std::min(static_cast<float>(width_), bounds.right());
+    const float expandedBottom = std::min(static_cast<float>(height_), bounds.bottom());
+    if (expandedRight <= expandedLeft || expandedBottom <= expandedTop) {
+        return;
+    }
+
+    for (auto it = strokeTileCache_.begin(); it != strokeTileCache_.end();) {
+        const StrokeTileKey& key = it->first;
+        if (key.epoch != strokeTileEpoch_) {
+            strokeTileCacheBytes_ -= std::min(strokeTileCacheBytes_, it->second.bytes);
+            it = strokeTileCache_.erase(it);
+            continue;
+        }
+
+        const float scale = key.scaleBucket / 100.0f;
+        const float tileLeft = static_cast<float>(key.tileX * kStrokeTileSize) / scale;
+        const float tileTop = static_cast<float>(key.tileY * kStrokeTileSize) / scale;
+        const float tileRight = static_cast<float>((key.tileX + 1) * kStrokeTileSize) / scale;
+        const float tileBottom = static_cast<float>((key.tileY + 1) * kStrokeTileSize) / scale;
+        const bool intersects = tileRight >= expandedLeft
+            && tileLeft <= expandedRight
+            && tileBottom >= expandedTop
+            && tileTop <= expandedBottom;
+
+        if (intersects) {
+            strokeTileCacheBytes_ -= std::min(strokeTileCacheBytes_, it->second.bytes);
+            it = strokeTileCache_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
 
 void SkiaDrawingEngine::setBackgroundType(const char* backgroundType) {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
@@ -149,6 +236,221 @@ void SkiaDrawingEngine::redrawStrokes() {
     needsStrokeRedraw_ = false;
 }
 
+sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
+    const StrokeTileKey& key,
+    int tileWidth,
+    int tileHeight,
+    float scale
+) {
+    SkImageInfo info = SkImageInfo::MakeN32Premul(tileWidth, tileHeight);
+    sk_sp<SkSurface> tileSurface = SkSurfaces::Raster(info);
+    if (!tileSurface) {
+        return nullptr;
+    }
+
+    SkCanvas* tileCanvas = tileSurface->getCanvas();
+    tileCanvas->clear(SK_ColorTRANSPARENT);
+    tileCanvas->translate(
+        static_cast<float>(-key.tileX * kStrokeTileSize),
+        static_cast<float>(-key.tileY * kStrokeTileSize)
+    );
+    tileCanvas->scale(scale, scale);
+
+    const float tileLeft = static_cast<float>(key.tileX * kStrokeTileSize) / scale;
+    const float tileTop = static_cast<float>(key.tileY * kStrokeTileSize) / scale;
+    const float tileRight = static_cast<float>(key.tileX * kStrokeTileSize + tileWidth) / scale;
+    const float tileBottom = static_cast<float>(key.tileY * kStrokeTileSize + tileHeight) / scale;
+    SkRect tileBounds = SkRect::MakeLTRB(tileLeft, tileTop, tileRight, tileBottom);
+
+    for (size_t i = 0; i < strokes_.size(); ++i) {
+        const auto& stroke = strokes_[i];
+        if (stroke.isEraser) {
+            continue;
+        }
+
+        SkRect strokeBounds = stroke.path.getBounds();
+        const float outset = std::max(8.0f, stroke.paint.getStrokeWidth() * 2.0f);
+        strokeBounds.outset(outset, outset);
+        if (!strokeBounds.intersects(tileBounds)) {
+            continue;
+        }
+
+        SkPaint strokePaint = stroke.paint;
+        uint8_t baseAlpha = stroke.paint.getAlpha();
+        strokePaint.setAlpha(static_cast<uint8_t>(baseAlpha * stroke.originalAlphaMod));
+
+        bool needsClipRestore = false;
+        if (!stroke.erasedBy.empty()) {
+            stroke.ensureEraserCacheValid();
+            if (!stroke.cachedEraserPath.isEmpty()) {
+                tileCanvas->save();
+                tileCanvas->clipPath(stroke.cachedEraserPath, SkClipOp::kDifference);
+                needsClipRestore = true;
+            }
+        }
+
+        renderStrokeGeometry(tileCanvas, stroke, strokePaint);
+
+        if (needsClipRestore) {
+            tileCanvas->restore();
+        }
+    }
+
+    return tileSurface->makeImageSnapshot();
+}
+
+void SkiaDrawingEngine::pruneStrokeTileCache() {
+    while (strokeTileCacheBytes_ > kMaxStrokeTileCacheBytes && !strokeTileCache_.empty()) {
+        auto oldest = strokeTileCache_.begin();
+        for (auto it = strokeTileCache_.begin(); it != strokeTileCache_.end(); ++it) {
+            if (it->second.lastUsed < oldest->second.lastUsed) {
+                oldest = it;
+            }
+        }
+        strokeTileCacheBytes_ -= std::min(strokeTileCacheBytes_, oldest->second.bytes);
+        strokeTileCache_.erase(oldest);
+    }
+}
+
+void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
+    const float scale = std::max(kMinimumRenderScale, renderScale_);
+
+    if (!selectedIndices_.empty() && isDraggingSelection_) {
+        canvas->save();
+        canvas->scale(scale, scale);
+        if (nonSelectedSnapshot_) {
+            canvas->drawImage(nonSelectedSnapshot_, 0, 0);
+        } else if (cachedStrokeSnapshot_) {
+            redrawStrokes();
+            canvas->drawImage(cachedStrokeSnapshot_, 0, 0);
+        }
+        if (selectedSnapshot_) {
+            canvas->drawImage(selectedSnapshot_, selectionOffsetX_, selectionOffsetY_);
+        }
+        canvas->restore();
+        return;
+    }
+
+    if (!pendingDeleteIndices_.empty()) {
+        canvas->save();
+        canvas->scale(scale, scale);
+        for (size_t i = 0; i < strokes_.size(); ++i) {
+            const auto& stroke = strokes_[i];
+            SkPaint strokePaint = stroke.paint;
+            if (!stroke.isEraser) {
+                uint8_t baseAlpha = stroke.paint.getAlpha();
+                const float alphaMod = pendingDeleteIndices_.count(i) > 0
+                    ? stroke.originalAlphaMod * 0.3f
+                    : stroke.originalAlphaMod;
+                strokePaint.setAlpha(static_cast<uint8_t>(baseAlpha * alphaMod));
+            }
+
+            bool needsClipRestore = false;
+            if (!stroke.erasedBy.empty()) {
+                stroke.ensureEraserCacheValid();
+                if (!stroke.cachedEraserPath.isEmpty()) {
+                    canvas->save();
+                    canvas->clipPath(stroke.cachedEraserPath, SkClipOp::kDifference);
+                    needsClipRestore = true;
+                }
+            }
+            renderStrokeGeometry(canvas, stroke, strokePaint);
+            if (needsClipRestore) {
+                canvas->restore();
+            }
+        }
+        canvas->restore();
+        return;
+    }
+
+    const int bucket = renderScaleBucket(scale);
+    const float bucketScale = bucket / 100.0f;
+    const float targetWidth = static_cast<float>(width_) * bucketScale;
+    const float targetHeight = static_cast<float>(height_) * bucketScale;
+    const float overscan = (static_cast<float>(kStrokeTileSize) * 2.0f) / bucketScale;
+    const float visibleLeft = std::max(0.0f, visibleLeft_ - overscan);
+    const float visibleTop = std::max(0.0f, visibleTop_ - overscan);
+    const float visibleRight = std::min(static_cast<float>(width_), visibleLeft_ + visibleWidth_ + overscan);
+    const float visibleBottom = std::min(static_cast<float>(height_), visibleTop_ + visibleHeight_ + overscan);
+
+    const int startTileX = std::max(0, static_cast<int>(std::floor((visibleLeft * bucketScale) / kStrokeTileSize)));
+    const int startTileY = std::max(0, static_cast<int>(std::floor((visibleTop * bucketScale) / kStrokeTileSize)));
+    const int endTileX = std::max(startTileX, static_cast<int>(std::ceil((visibleRight * bucketScale) / kStrokeTileSize)) - 1);
+    const int endTileY = std::max(startTileY, static_cast<int>(std::ceil((visibleBottom * bucketScale) / kStrokeTileSize)) - 1);
+    const int maxTileX = std::max(0, static_cast<int>(std::ceil(targetWidth / kStrokeTileSize)) - 1);
+    const int maxTileY = std::max(0, static_cast<int>(std::ceil(targetHeight / kStrokeTileSize)) - 1);
+
+    for (int tileY = std::min(startTileY, maxTileY); tileY <= std::min(endTileY, maxTileY); ++tileY) {
+        for (int tileX = std::min(startTileX, maxTileX); tileX <= std::min(endTileX, maxTileX); ++tileX) {
+            StrokeTileKey key{bucket, tileX, tileY, strokeTileEpoch_};
+            const int tilePixelLeft = tileX * kStrokeTileSize;
+            const int tilePixelTop = tileY * kStrokeTileSize;
+            const int tileWidth = std::max(
+                1,
+                std::min(kStrokeTileSize, static_cast<int>(std::ceil(targetWidth)) - tilePixelLeft)
+            );
+            const int tileHeight = std::max(
+                1,
+                std::min(kStrokeTileSize, static_cast<int>(std::ceil(targetHeight)) - tilePixelTop)
+            );
+
+            auto it = strokeTileCache_.find(key);
+            if (it == strokeTileCache_.end()) {
+                sk_sp<SkImage> image = renderStrokeTile(key, tileWidth, tileHeight, bucketScale);
+                if (!image) {
+                    continue;
+                }
+                StrokeTileEntry entry;
+                entry.image = std::move(image);
+                entry.bytes = static_cast<size_t>(tileWidth) * static_cast<size_t>(tileHeight) * 4;
+                entry.lastUsed = ++strokeTileUseCounter_;
+                strokeTileCacheBytes_ += entry.bytes;
+                auto inserted = strokeTileCache_.emplace(key, std::move(entry));
+                it = inserted.first;
+                pruneStrokeTileCache();
+            } else {
+                it->second.lastUsed = ++strokeTileUseCounter_;
+            }
+
+            if (it != strokeTileCache_.end() && it->second.image) {
+                canvas->drawImage(
+                    it->second.image,
+                    static_cast<float>(tilePixelLeft),
+                    static_cast<float>(tilePixelTop)
+                );
+            }
+        }
+    }
+}
+
+void SkiaDrawingEngine::renderActiveContent(SkCanvas* canvas, bool useIncrementalActiveSurface) {
+    if (hasActiveShapePreview_ && !activeShapePreviewPoints_.empty()) {
+        Stroke previewStroke;
+        previewStroke.points = activeShapePreviewPoints_;
+        previewStroke.paint = currentPaint_;
+        previewStroke.path = activeShapePreviewPath_;
+        previewStroke.toolType = activeShapePreviewToolType_;
+
+        SkPaint previewPaint = currentPaint_;
+        if (currentTool_ != "highlighter" && currentTool_ != "marker") {
+            const float pressureAlphaMod = 0.85f + (averagePressure(currentPoints_) * 0.15f);
+            previewPaint.setAlpha(static_cast<uint8_t>(previewPaint.getAlpha() * pressureAlphaMod));
+        }
+
+        renderStrokeGeometry(canvas, previewStroke, previewPaint);
+    } else if (currentPoints_.size() >= 2 && currentTool_ != "select" && currentTool_ != "eraser") {
+        if (useIncrementalActiveSurface) {
+            activeStrokeRenderer_->renderIncremental(canvas, currentPoints_, currentPaint_, currentTool_);
+        } else {
+            Stroke activeStroke;
+            activeStroke.points = currentPoints_;
+            activeStroke.paint = currentPaint_;
+            activeStroke.toolType = currentTool_;
+            renderStrokeGeometry(canvas, activeStroke, currentPaint_);
+        }
+    }
+}
+
 void SkiaDrawingEngine::redrawEraserMask() {
     if (!needsEraserMaskRedraw_) return;
 
@@ -178,6 +480,61 @@ void SkiaDrawingEngine::redrawEraserMask() {
 
 void SkiaDrawingEngine::render(SkCanvas* canvas) {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+
+    const bool useScaleAwarePath = renderScale_ > 1.01f;
+
+    if (useScaleAwarePath) {
+        if (backgroundType_ == "pdf") {
+            if (pdfBackgroundImage_) {
+                canvas->clear(SK_ColorWHITE);
+            } else {
+                canvas->clear(SK_ColorTRANSPARENT);
+            }
+        } else {
+            canvas->clear(SK_ColorWHITE);
+        }
+
+        canvas->save();
+        canvas->scale(renderScale_, renderScale_);
+        if (backgroundType_ != "pdf" || pdfBackgroundImage_) {
+            backgroundRenderer_->drawBackground(
+                canvas,
+                backgroundType_,
+                width_,
+                height_,
+                pdfBackgroundImage_,
+                backgroundOriginY_
+            );
+        }
+        canvas->restore();
+
+        renderScaleAwareStrokes(canvas);
+
+        canvas->save();
+        canvas->scale(renderScale_, renderScale_);
+        renderActiveContent(canvas, false);
+
+        if (showEraserCursor_ && eraserCursorRadius_ > 0) {
+            SkPaint cursorPaint;
+            cursorPaint.setStyle(SkPaint::kStroke_Style);
+            cursorPaint.setColor(SkColorSetARGB(180, 128, 128, 128));
+            cursorPaint.setStrokeWidth(2.0f);
+            cursorPaint.setAntiAlias(true);
+            canvas->drawCircle(eraserCursorX_, eraserCursorY_, eraserCursorRadius_, cursorPaint);
+        }
+
+        if (currentTool_ == "select") {
+            selection_->renderLasso(canvas);
+        }
+
+        if (isDraggingSelection_ && selectionHighlightSnapshot_) {
+            canvas->drawImage(selectionHighlightSnapshot_, selectionOffsetX_, selectionOffsetY_);
+        } else {
+            selection_->renderSelection(canvas, strokes_, selectedIndices_);
+        }
+        canvas->restore();
+        return;
+    }
 
     // OPTIMIZATION: When dragging selection, use all cached snapshots - pure O(1) per frame
     if (!selectedIndices_.empty() && isDraggingSelection_) {
@@ -301,23 +658,7 @@ void SkiaDrawingEngine::render(SkCanvas* canvas) {
     }
 
     // 4. Draw active stroke incrementally (O(1) per frame instead of O(n))
-    if (hasActiveShapePreview_ && !activeShapePreviewPoints_.empty()) {
-        Stroke previewStroke;
-        previewStroke.points = activeShapePreviewPoints_;
-        previewStroke.paint = currentPaint_;
-        previewStroke.path = activeShapePreviewPath_;
-        previewStroke.toolType = activeShapePreviewToolType_;
-
-        SkPaint previewPaint = currentPaint_;
-        if (currentTool_ != "highlighter" && currentTool_ != "marker") {
-            const float pressureAlphaMod = 0.85f + (averagePressure(currentPoints_) * 0.15f);
-            previewPaint.setAlpha(static_cast<uint8_t>(previewPaint.getAlpha() * pressureAlphaMod));
-        }
-
-        renderStrokeGeometry(canvas, previewStroke, previewPaint);
-    } else if (currentPoints_.size() >= 2 && currentTool_ != "select" && currentTool_ != "eraser") {
-        activeStrokeRenderer_->renderIncremental(canvas, currentPoints_, currentPaint_, currentTool_);
-    }
+    renderActiveContent(canvas, true);
 
     // Draw eraser cursor for pixel eraser
     if (showEraserCursor_ && eraserCursorRadius_ > 0) {
@@ -344,12 +685,50 @@ void SkiaDrawingEngine::render(SkCanvas* canvas) {
     }
 }
 
+void SkiaDrawingEngine::renderForExport(SkCanvas* canvas) {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+
+    const float originalRenderScale = renderScale_;
+    const float originalVisibleLeft = visibleLeft_;
+    const float originalVisibleTop = visibleTop_;
+    const float originalVisibleWidth = visibleWidth_;
+    const float originalVisibleHeight = visibleHeight_;
+
+    renderScale_ = 1.0f;
+    visibleLeft_ = 0.0f;
+    visibleTop_ = 0.0f;
+    visibleWidth_ = static_cast<float>(width_);
+    visibleHeight_ = static_cast<float>(height_);
+    render(canvas);
+
+    renderScale_ = originalRenderScale;
+    visibleLeft_ = originalVisibleLeft;
+    visibleTop_ = originalVisibleTop;
+    visibleWidth_ = originalVisibleWidth;
+    visibleHeight_ = originalVisibleHeight;
+}
+
 sk_sp<SkImage> SkiaDrawingEngine::makeSnapshot() {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
 
     SkImageInfo info = SkImageInfo::MakeN32Premul(width_, height_);
     sk_sp<SkSurface> surface = SkSurfaces::Raster(info);
+    const float originalRenderScale = renderScale_;
+    const float originalVisibleLeft = visibleLeft_;
+    const float originalVisibleTop = visibleTop_;
+    const float originalVisibleWidth = visibleWidth_;
+    const float originalVisibleHeight = visibleHeight_;
+    renderScale_ = 1.0f;
+    visibleLeft_ = 0.0f;
+    visibleTop_ = 0.0f;
+    visibleWidth_ = static_cast<float>(width_);
+    visibleHeight_ = static_cast<float>(height_);
     render(surface->getCanvas());
+    renderScale_ = originalRenderScale;
+    visibleLeft_ = originalVisibleLeft;
+    visibleTop_ = originalVisibleTop;
+    visibleWidth_ = originalVisibleWidth;
+    visibleHeight_ = originalVisibleHeight;
     return surface->makeImageSnapshot();
 }
 
@@ -383,6 +762,17 @@ std::vector<std::string> SkiaDrawingEngine::batchExportPages(
     float originalBackgroundOriginY = backgroundOriginY_;
     auto originalUndoStack = undoStack_;
     auto originalRedoStack = redoStack_;
+    const float originalRenderScale = renderScale_;
+    const float originalVisibleLeft = visibleLeft_;
+    const float originalVisibleTop = visibleTop_;
+    const float originalVisibleWidth = visibleWidth_;
+    const float originalVisibleHeight = visibleHeight_;
+
+    renderScale_ = 1.0f;
+    visibleLeft_ = 0.0f;
+    visibleTop_ = 0.0f;
+    visibleWidth_ = static_cast<float>(width_);
+    visibleHeight_ = static_cast<float>(height_);
 
     for (size_t i = 0; i < pagesData.size(); ++i) {
         SkCanvas* canvas = exportSurface->getCanvas();
@@ -408,7 +798,7 @@ std::vector<std::string> SkiaDrawingEngine::batchExportPages(
 
         normalizeStrokeColorsForRasterExport(strokes_);
 
-        needsStrokeRedraw_ = true;
+        markStrokeCachesDirty();
         needsEraserMaskRedraw_ = true;
         render(canvas);
         canvas->restore();
@@ -436,7 +826,12 @@ std::vector<std::string> SkiaDrawingEngine::batchExportPages(
     backgroundOriginY_ = originalBackgroundOriginY;
     undoStack_ = std::move(originalUndoStack);
     redoStack_ = std::move(originalRedoStack);
-    needsStrokeRedraw_ = true;
+    renderScale_ = originalRenderScale;
+    visibleLeft_ = originalVisibleLeft;
+    visibleTop_ = originalVisibleTop;
+    visibleWidth_ = originalVisibleWidth;
+    visibleHeight_ = originalVisibleHeight;
+    markStrokeCachesDirty();
     needsEraserMaskRedraw_ = true;
 
     return results;

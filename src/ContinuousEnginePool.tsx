@@ -35,7 +35,11 @@ export const ContinuousEnginePool = memo(forwardRef<
   ContinuousEnginePoolRef,
   ContinuousEnginePoolProps
 >(function ContinuousEnginePool({
+  pageWidth,
   canvasHeight,
+  contentPadding,
+  viewportTransform,
+  renderScale,
   backgroundType,
   renderBackend = DEFAULT_NATIVE_INK_RENDER_BACKEND,
   pdfBackgroundBaseUri,
@@ -188,8 +192,12 @@ export const ContinuousEnginePool = memo(forwardRef<
   }, [
     backgroundType,
     canvasHeight,
+    contentPadding,
+    pageWidth,
     pdfBackgroundBaseUri,
+    renderScale,
     startSlotBenchmarkRecording,
+    viewportTransform,
   ]);
 
   const applyToolState = useCallback((toolState: ContinuousEnginePoolToolState) => {
@@ -268,7 +276,11 @@ export const ContinuousEnginePool = memo(forwardRef<
           key={`continuous-engine-pool-${poolIndex}`}
           ref={(slotRef) => handleSlotRef(poolIndex, slotRef)}
           poolIndex={poolIndex}
+          pageWidth={pageWidth}
           canvasHeight={canvasHeight}
+          contentPadding={contentPadding}
+          viewportTransform={viewportTransform}
+          renderScale={renderScale}
           backgroundType={backgroundType}
           renderBackend={renderBackend}
           pdfBackgroundBaseUri={pdfBackgroundBaseUri}
@@ -288,7 +300,11 @@ export const ContinuousEnginePool = memo(forwardRef<
     </>
   );
 }), (prev, next) => (
+  prev.pageWidth === next.pageWidth &&
   prev.canvasHeight === next.canvasHeight &&
+  prev.contentPadding === next.contentPadding &&
+  prev.viewportTransform === next.viewportTransform &&
+  prev.renderScale === next.renderScale &&
   prev.backgroundType === next.backgroundType &&
   prev.renderBackend === next.renderBackend &&
   prev.pdfBackgroundBaseUri === next.pdfBackgroundBaseUri &&

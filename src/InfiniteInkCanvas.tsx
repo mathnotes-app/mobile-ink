@@ -6,7 +6,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { View } from "react-native";
+import { PixelRatio, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { ContinuousEnginePool } from "./ContinuousEnginePool";
 import type {
@@ -48,6 +48,10 @@ import {
   BLANK_PAGE_PAYLOAD,
   withSingleTrailingBlankPage,
 } from "./utils/pageGrowth";
+import {
+  getNativeRenderScaleBudget,
+  quantizeNativeRenderScale,
+} from "./utils/nativeRenderScale";
 
 export type {
   InfiniteInkCanvasProps,
@@ -110,6 +114,9 @@ function InfiniteInkCanvasImpl(
   const [pages, setPages] = useState<NotebookPage[]>(() =>
     createInitialPages(initialData, initialPageCount),
   );
+  const [nativeViewportTransform, setNativeViewportTransform] =
+    useState<InfiniteInkViewportTransform | null>(null);
+  const [nativeRenderScale, setNativeRenderScale] = useState(1);
   const pagesRef = useRef(pages);
   const currentPageIndexRef = useRef(0);
   const toolStateRef = useRef(toolState);
@@ -203,12 +210,36 @@ function InfiniteInkCanvasImpl(
     );
   }, [commitViewportPage, contentPadding, pageHeight]);
 
+  const updateNativeRenderViewport = useCallback((transform: InfiniteInkViewportTransform) => {
+    const nextRenderScale = quantizeNativeRenderScale(
+      transform.scale,
+      getNativeRenderScaleBudget(pageWidth, pageHeight, PixelRatio.get()),
+    );
+    setNativeRenderScale((previousScale) => (
+      previousScale === nextRenderScale ? previousScale : nextRenderScale
+    ));
+    setNativeViewportTransform((previousTransform) => {
+      if (
+        previousTransform &&
+        previousTransform.scale === transform.scale &&
+        previousTransform.translateX === transform.translateX &&
+        previousTransform.translateY === transform.translateY &&
+        previousTransform.containerWidth === transform.containerWidth &&
+        previousTransform.containerHeight === transform.containerHeight
+      ) {
+        return previousTransform;
+      }
+      return transform;
+    });
+  }, [pageHeight, pageWidth]);
+
   const handleTransformChange = useCallback((transform: InfiniteInkViewportTransform) => {
     latestTransformRef.current = transform;
     if (isMovingRef.current) {
       return;
     }
 
+    updateNativeRenderViewport(transform);
     commitViewportPage(
       getVisiblePageIndex(
         transform,
@@ -217,15 +248,20 @@ function InfiniteInkCanvasImpl(
         contentPadding,
       ),
     );
-  }, [commitViewportPage, contentPadding, pageHeight]);
+  }, [commitViewportPage, contentPadding, pageHeight, updateNativeRenderViewport]);
 
   const handleMotionStateChange = useCallback((isMoving: boolean) => {
     isMovingRef.current = isMoving;
     onMotionStateChange?.(isMoving);
     if (!isMoving) {
+      const transform = viewportRef.current?.getTransform() ?? latestTransformRef.current;
+      if (transform) {
+        latestTransformRef.current = transform;
+        updateNativeRenderViewport(transform);
+      }
       commitLatestViewportPage();
     }
-  }, [commitLatestViewportPage, onMotionStateChange]);
+  }, [commitLatestViewportPage, onMotionStateChange, updateNativeRenderViewport]);
 
   const registerPerPageSlot = useCallback((
     pageId: string,
@@ -512,7 +548,11 @@ function InfiniteInkCanvasImpl(
             />
             <ContinuousEnginePool
               ref={enginePoolRef}
+              pageWidth={pageWidth}
               canvasHeight={pageHeight}
+              contentPadding={contentPadding}
+              viewportTransform={nativeViewportTransform}
+              renderScale={nativeRenderScale}
               backgroundType={backgroundType}
               renderBackend={renderBackend}
               pdfBackgroundBaseUri={pdfBackgroundBaseUri}

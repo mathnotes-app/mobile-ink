@@ -388,6 +388,27 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_destroyDrawingEngine(
     delete ctx;
 }
 
+JNIEXPORT void JNICALL
+Java_com_mathnotes_mobileink_MobileInkCanvasView_setRenderViewport(
+    JNIEnv* env, jobject obj, jlong contextPtr,
+    jfloat renderScale,
+    jfloat visibleLeft,
+    jfloat visibleTop,
+    jfloat visibleWidth,
+    jfloat visibleHeight) {
+
+    auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
+    if (ctx && ctx->engine) {
+        ctx->engine->setRenderViewport(
+            renderScale,
+            visibleLeft,
+            visibleTop,
+            visibleWidth,
+            visibleHeight
+        );
+    }
+}
+
 // Touch handling with stylus support (pressure, azimuth, altitude)
 JNIEXPORT void JNICALL
 Java_com_mathnotes_mobileink_MobileInkCanvasView_touchBegan(
@@ -923,7 +944,11 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_renderToPixelsScaled(
     const float resolvedScale = scale > 0.0f ? scale : 1.0f;
     canvas->save();
     canvas->scale(resolvedScale, resolvedScale);
-    renderWithDisplayColorOrdering(ctx->engine.get(), canvas);
+    SkPaint outputPaint;
+    outputPaint.setColorFilter(makeRedBlueSwapFilter());
+    canvas->saveLayer(nullptr, &outputPaint);
+    ctx->engine->renderForExport(canvas);
+    canvas->restore();
     canvas->restore();
 
     AndroidBitmap_unlockPixels(env, bitmap);

@@ -19,6 +19,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <mutex>
+#include <cstdint>
 #include "DrawingTypes.h"
 
 namespace nativedrawing {
@@ -86,6 +87,14 @@ public:
 
     // Rendering
     void render(SkCanvas* canvas);
+    void renderForExport(SkCanvas* canvas);
+    void setRenderViewport(
+        float renderScale,
+        float visibleLeft,
+        float visibleTop,
+        float visibleWidth,
+        float visibleHeight
+    );
     sk_sp<SkImage> makeSnapshot();
 
     // Batch export: Render multiple pages to PNG without creating new engine each time
@@ -192,6 +201,46 @@ private:
     sk_sp<SkImage> cachedStrokeSnapshot_;  // Cached snapshot for fast rendering
     bool needsStrokeRedraw_;
 
+    struct StrokeTileKey {
+        int scaleBucket = 100;
+        int tileX = 0;
+        int tileY = 0;
+        uint64_t epoch = 0;
+
+        bool operator==(const StrokeTileKey& other) const {
+            return scaleBucket == other.scaleBucket
+                && tileX == other.tileX
+                && tileY == other.tileY
+                && epoch == other.epoch;
+        }
+    };
+
+    struct StrokeTileKeyHasher {
+        size_t operator()(const StrokeTileKey& key) const {
+            uint64_t value = static_cast<uint64_t>(static_cast<uint32_t>(key.scaleBucket));
+            value = (value * 1315423911u) ^ static_cast<uint32_t>(key.tileX);
+            value = (value * 1315423911u) ^ static_cast<uint32_t>(key.tileY);
+            value = (value * 1315423911u) ^ key.epoch;
+            return static_cast<size_t>(value);
+        }
+    };
+
+    struct StrokeTileEntry {
+        sk_sp<SkImage> image;
+        size_t bytes = 0;
+        uint64_t lastUsed = 0;
+    };
+
+    std::unordered_map<StrokeTileKey, StrokeTileEntry, StrokeTileKeyHasher> strokeTileCache_;
+    uint64_t strokeTileEpoch_ = 1;
+    uint64_t strokeTileUseCounter_ = 0;
+    size_t strokeTileCacheBytes_ = 0;
+    float renderScale_ = 1.0f;
+    float visibleLeft_ = 0.0f;
+    float visibleTop_ = 0.0f;
+    float visibleWidth_;
+    float visibleHeight_;
+
     // Eraser mask surface for dual-surface architecture
     // White = keep stroke, Black = erase stroke
     // This allows eraser updates without re-rendering all strokes
@@ -258,6 +307,12 @@ private:
     void clearActiveShapePreview();
     bool updateActiveShapePreviewForPoint(float x, float y);
     void redrawStrokes();
+    void markStrokeCachesDirty();
+    void invalidateStrokeTilesForRect(const SkRect& bounds);
+    void renderScaleAwareStrokes(SkCanvas* canvas);
+    void renderActiveContent(SkCanvas* canvas, bool useIncrementalActiveSurface);
+    sk_sp<SkImage> renderStrokeTile(const StrokeTileKey& key, int tileWidth, int tileHeight, float scale);
+    void pruneStrokeTileCache();
     void redrawEraserMask();  // Dual-surface: only redraws eraser circles to mask
 
     // Pixel eraser stroke splitting - splits a stroke by removing portions that intersect the eraser

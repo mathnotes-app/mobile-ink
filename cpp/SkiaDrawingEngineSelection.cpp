@@ -149,7 +149,7 @@ void SkiaDrawingEngine::deleteSelection() {
 
     auto commit = [this](StrokeDelta&& d) { commitDelta(std::move(d)); };
     selection_->deleteSelection(strokes_, selectedIndices_, commit);
-    needsStrokeRedraw_ = true;
+    markStrokeCachesDirty();
 }
 
 void SkiaDrawingEngine::copySelection() {
@@ -163,7 +163,7 @@ void SkiaDrawingEngine::pasteSelection(float offsetX, float offsetY) {
 
     auto commit = [this](StrokeDelta&& d) { commitDelta(std::move(d)); };
     selection_->pasteSelection(strokes_, copiedStrokes_, offsetX, offsetY, commit);
-    needsStrokeRedraw_ = true;
+    markStrokeCachesDirty();
 }
 
 void SkiaDrawingEngine::moveSelection(float dx, float dy) {
@@ -201,7 +201,7 @@ void SkiaDrawingEngine::finalizeMove() {
     selection_->finalizeMove(strokes_, selectedIndices_, totalDx, totalDy, commit);
     endSelectionDrag();
     // Now rebuild stroke surface with all strokes at final positions
-    needsStrokeRedraw_ = true;
+    markStrokeCachesDirty();
 }
 
 void SkiaDrawingEngine::beginSelectionTransform(int handleIndex) {
@@ -286,7 +286,7 @@ void SkiaDrawingEngine::updateSelectionTransform(float x, float y) {
     }
 
     selectionTransformHasDelta_ = true;
-    needsStrokeRedraw_ = true;
+    markStrokeCachesDirty();
 }
 
 void SkiaDrawingEngine::finalizeSelectionTransform() {
@@ -313,7 +313,7 @@ void SkiaDrawingEngine::finalizeSelectionTransform() {
     selectionTransformHandleIndex_ = -1;
     selectionTransformHasDelta_ = false;
     isTransformingSelection_ = false;
-    needsStrokeRedraw_ = true;
+    markStrokeCachesDirty();
 }
 
 void SkiaDrawingEngine::cancelSelectionTransform() {
@@ -333,7 +333,7 @@ void SkiaDrawingEngine::cancelSelectionTransform() {
     selectionTransformHandleIndex_ = -1;
     selectionTransformHasDelta_ = false;
     isTransformingSelection_ = false;
-    needsStrokeRedraw_ = true;
+    markStrokeCachesDirty();
 }
 
 void SkiaDrawingEngine::prepareSelectionDragCache() {
