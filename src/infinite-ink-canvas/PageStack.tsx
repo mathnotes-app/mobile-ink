@@ -2,7 +2,10 @@ import React, { memo } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import NativeInkPageBackground from "../NativeInkPageBackground";
 import type { NotebookPage } from "../types";
+import { getContinuousEnginePoolRange } from "../utils/continuousEnginePool";
 import { styles } from "./styles";
+
+const PDF_BACKGROUND_WINDOW_SIZE = 7;
 
 export type PageBackgroundsProps = {
   pages: NotebookPage[];
@@ -11,6 +14,7 @@ export type PageBackgroundsProps = {
   backgroundType: string;
   pdfBackgroundBaseUri?: string;
   showPageLabels: boolean;
+  visiblePageIndex: number;
 };
 
 export const PageBackgrounds = memo(function PageBackgrounds({
@@ -20,10 +24,32 @@ export const PageBackgrounds = memo(function PageBackgrounds({
   backgroundType,
   pdfBackgroundBaseUri,
   showPageLabels,
+  visiblePageIndex,
 }: PageBackgroundsProps) {
+  const shouldWindowPdfBackgrounds = backgroundType === "pdf";
+  const renderRange = shouldWindowPdfBackgrounds
+    ? getContinuousEnginePoolRange(
+        visiblePageIndex,
+        pages.length,
+        PDF_BACKGROUND_WINDOW_SIZE,
+      )
+    : { startIndex: 0, endIndex: pages.length - 1 };
+  const renderedPages = [];
+
+  for (
+    let pageIndex = renderRange.startIndex;
+    pageIndex <= renderRange.endIndex;
+    pageIndex += 1
+  ) {
+    const page = pages[pageIndex];
+    if (page) {
+      renderedPages.push({ page, pageIndex });
+    }
+  }
+
   return (
     <>
-      {pages.map((page, pageIndex) => {
+      {renderedPages.map(({ page, pageIndex }) => {
         const pdfBackgroundUri = backgroundType === "pdf" && pdfBackgroundBaseUri
           ? `${pdfBackgroundBaseUri}#page=${page.pdfPageNumber || pageIndex + 1}`
           : undefined;

@@ -570,7 +570,7 @@ export const NativeInkCanvas = forwardRef<
     style: props.style,
     onDrawingChange: props.onDrawingChange,
     onDrawingBegin: props.onDrawingBegin,
-    onSelectionChange: props.onSelectionChange,
+    onInkSelectionChange: props.onSelectionChange,
     backgroundType: props.backgroundType,
     pdfBackgroundUri: props.pdfBackgroundUri,
     renderSuspended: props.renderSuspended,

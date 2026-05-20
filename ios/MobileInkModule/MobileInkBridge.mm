@@ -381,8 +381,8 @@ void* createGaneshMetalContext(void* devicePtr, void* commandQueuePtr) {
     id<MTLCommandQueue> commandQueue = (__bridge id<MTLCommandQueue>)commandQueuePtr;
 
     GrMtlBackendContext backendContext = {};
-    backendContext.fDevice.reset((__bridge void*)device);
-    backendContext.fQueue.reset((__bridge void*)commandQueue);
+    backendContext.fDevice.retain((__bridge void*)device);
+    backendContext.fQueue.retain((__bridge void*)commandQueue);
 
     sk_sp<GrDirectContext> context = GrDirectContexts::MakeMetal(backendContext);
     if (!context) {

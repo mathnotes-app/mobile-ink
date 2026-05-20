@@ -29,6 +29,7 @@ type UseZoomableViewportGesturesParams = {
   edgeExclusionWidth: number;
   enableMomentumScroll: boolean;
   panEnabled: boolean;
+  singleFingerPanBlocked: boolean;
   onTransformChange?: ZoomableInkViewportProps["onTransformChange"];
   transformNotificationMinIntervalMs: number;
   onContentTap?: ZoomableInkViewportProps["onContentTap"];
@@ -72,6 +73,7 @@ export const useZoomableViewportGestures = ({
   edgeExclusionWidth,
   enableMomentumScroll,
   panEnabled,
+  singleFingerPanBlocked,
   onTransformChange,
   transformNotificationMinIntervalMs,
   onContentTap,
@@ -144,8 +146,10 @@ export const useZoomableViewportGestures = ({
   const isTouchBlocked = (x: number, y: number): boolean => {
     "worklet";
     const currentScale = scale.value > 0 ? scale.value : 1;
-    const contentX = (x - translateX.value) / currentScale;
-    const contentY = (y - translateY.value) / currentScale;
+    const originX = containerWidth.value / 2;
+    const originY = containerHeight.value / 2;
+    const contentX = (x - originX - translateX.value) / currentScale + originX;
+    const contentY = (y - originY - translateY.value) / currentScale + originY;
 
     for (const rect of blockedRects.value) {
       if (
@@ -442,12 +446,16 @@ export const useZoomableViewportGestures = ({
           // bug was "I can't tap to deselect, I have to use pencil."
         }
       })
-      .onTouchesMove((_event, stateManager) => {
+      .onTouchesMove((event, stateManager) => {
         "worklet";
         // First movement after a valid touch-down promotes this pan to ACTIVE.
         // (Stylus / edge / blocked touches were already failed in onTouchesDown,
         // so we never reach here in those cases.)
         if (!fingerDrawingEnabled) {
+          if (singleFingerPanBlocked && event.allTouches.length <= 1) {
+            stateManager.fail();
+            return;
+          }
           stateManager.activate();
         }
       });
@@ -630,7 +638,18 @@ export const useZoomableViewportGestures = ({
       });
 
     return gesture;
-  }, [enableMomentumScroll, enabled, fingerDrawingEnabled, edgeExclusionWidth, notifyGestureStart, notifyGestureEnd, notifyMotionChange, notifyTransformChange, panEnabled]);
+  }, [
+    enableMomentumScroll,
+    enabled,
+    fingerDrawingEnabled,
+    edgeExclusionWidth,
+    notifyGestureStart,
+    notifyGestureEnd,
+    notifyMotionChange,
+    notifyTransformChange,
+    panEnabled,
+    singleFingerPanBlocked,
+  ]);
 
   const tapGesture = useMemo(() => {
     return Gesture.Tap()

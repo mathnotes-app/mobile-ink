@@ -75,4 +75,18 @@ describe("withSingleTrailingBlankPage", () => {
 
     expect(pages).toHaveLength(3);
   });
+
+  it("preserves every imported PDF page without appending a disposable blank", () => {
+    const pages = withSingleTrailingBlankPage([
+      { ...page("page-1"), pdfPageNumber: 1, pageType: "pdf" },
+      { ...page("page-2"), pdfPageNumber: 2, pageType: "pdf" },
+      { ...page("page-3"), pdfPageNumber: 3, pageType: "pdf" },
+    ]);
+
+    expect(pages.map((candidatePage) => candidatePage.id)).toEqual([
+      "page-1",
+      "page-2",
+      "page-3",
+    ]);
+  });
 });
