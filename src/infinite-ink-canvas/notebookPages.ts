@@ -1,4 +1,5 @@
 import type { NotebookPage, SerializedNotebookData } from "../types";
+import { getVisibleContentRect } from "../utils/viewportTransform";
 import {
   BLANK_PAGE_PAYLOAD,
   createBlankPage,
@@ -53,9 +54,9 @@ export const getVisiblePageIndex = (
   pageCount: number,
   contentPadding: number,
 ) => {
-  const scale = Math.max(transform.scale, 0.0001);
-  const visibleTopY = Math.max(0, (-transform.translateY) / scale - contentPadding);
-  const visibleCenterY = visibleTopY + transform.containerHeight / (2 * scale);
+  const visibleRect = getVisibleContentRect(transform);
+  const visibleTopY = Math.max(0, visibleRect.top - contentPadding);
+  const visibleCenterY = visibleTopY + visibleRect.height / 2;
   return Math.max(
     0,
     Math.min(pageCount - 1, Math.floor(visibleCenterY / pageHeight)),

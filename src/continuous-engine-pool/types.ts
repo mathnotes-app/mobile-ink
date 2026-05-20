@@ -52,7 +52,17 @@ export type ContinuousEnginePoolRef = {
 };
 
 export type ContinuousEnginePoolProps = {
+  pageWidth: number;
   canvasHeight: number;
+  contentPadding: number;
+  viewportTransform: {
+    scale: number;
+    translateX: number;
+    translateY: number;
+    containerWidth: number;
+    containerHeight: number;
+  } | null;
+  renderScale: number;
   backgroundType: string;
   renderBackend?: NativeInkRenderBackend;
   pdfBackgroundBaseUri: string | undefined;
@@ -104,7 +114,11 @@ export type PooledCanvasSlotHandle = {
 
 export type PooledCanvasSlotProps = {
   poolIndex: number;
+  pageWidth: number;
   canvasHeight: number;
+  contentPadding: number;
+  viewportTransform: ContinuousEnginePoolProps["viewportTransform"];
+  renderScale: number;
   backgroundType: string;
   renderBackend?: NativeInkRenderBackend;
   pdfBackgroundBaseUri?: string;

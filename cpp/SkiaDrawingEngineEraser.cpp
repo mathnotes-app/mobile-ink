@@ -50,7 +50,7 @@ void SkiaDrawingEngine::eraseObjects() {
         if (remaining.size() != strokes_.size()) {
             strokes_ = remaining;
             commitDelta(std::move(delta));
-            needsStrokeRedraw_ = true;
+            markStrokeCachesDirty();
         }
     };
 
@@ -195,6 +195,23 @@ bool SkiaDrawingEngine::applyPixelEraserAt(float eraserX, float eraserY, float r
     }
 
     if (anyModified) {
+        SkRect erasedBounds = SkRect::MakeLTRB(
+            eraserX - radius,
+            eraserY - radius,
+            eraserX + radius,
+            eraserY + radius
+        );
+        if (hasLastEraserPoint_) {
+            erasedBounds.join(SkRect::MakeLTRB(
+                lastEraserX_ - lastEraserRadius_,
+                lastEraserY_ - lastEraserRadius_,
+                lastEraserX_ + lastEraserRadius_,
+                lastEraserY_ + lastEraserRadius_
+            ));
+        }
+        erasedBounds.outset(radius * 2.0f, radius * 2.0f);
+        invalidateStrokeTilesForRect(erasedBounds);
+
         // OPTIMIZATION: Apply kClear directly to stroke surface for instant feedback
         // This avoids full redraw during active erasing - much faster
         if (strokeSurface_) {

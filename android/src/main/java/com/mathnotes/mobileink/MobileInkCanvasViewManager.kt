@@ -65,6 +65,31 @@ class MobileInkCanvasViewManager(private val reactContext: ReactApplicationConte
         view.renderBackend = backend ?: "ganesh"
     }
 
+    @ReactProp(name = "renderScale")
+    fun setRenderScale(view: MobileInkCanvasView, scale: Float) {
+        view.renderScale = scale
+    }
+
+    @ReactProp(name = "renderViewportLeftRatio")
+    fun setRenderViewportLeftRatio(view: MobileInkCanvasView, ratio: Float) {
+        view.renderViewportLeftRatio = ratio
+    }
+
+    @ReactProp(name = "renderViewportTopRatio")
+    fun setRenderViewportTopRatio(view: MobileInkCanvasView, ratio: Float) {
+        view.renderViewportTopRatio = ratio
+    }
+
+    @ReactProp(name = "renderViewportWidthRatio")
+    fun setRenderViewportWidthRatio(view: MobileInkCanvasView, ratio: Float) {
+        view.renderViewportWidthRatio = ratio
+    }
+
+    @ReactProp(name = "renderViewportHeightRatio")
+    fun setRenderViewportHeightRatio(view: MobileInkCanvasView, ratio: Float) {
+        view.renderViewportHeightRatio = ratio
+    }
+
     private fun parseToolColor(colorHex: String): Int {
         val trimmed = colorHex.trim()
         val hex = trimmed.removePrefix("#")

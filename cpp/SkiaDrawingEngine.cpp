@@ -63,6 +63,8 @@ SkiaDrawingEngine::SkiaDrawingEngine(int width, int height)
     , currentTool_("pen")
     , eraserMode_("pixel")
     , needsStrokeRedraw_(true)
+    , visibleWidth_(static_cast<float>(width))
+    , visibleHeight_(static_cast<float>(height))
     , needsEraserMaskRedraw_(true)
     , hasLastSmoothedPoint_(false)
     , eraserCursorX_(0)
@@ -602,6 +604,12 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
     }
 
     strokes_.push_back(stroke);
+    SkRect appendedStrokeBounds = stroke.path.getBounds();
+    appendedStrokeBounds.outset(
+        std::max(8.0f, stroke.paint.getStrokeWidth() * 2.0f),
+        std::max(8.0f, stroke.paint.getStrokeWidth() * 2.0f)
+    );
+    invalidateStrokeTilesForRect(appendedStrokeBounds);
 
     // === FAST PATH: Composite active stroke directly ===
     // This preserves O(1) stroke completion for smooth performance.
@@ -635,7 +643,7 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
         maxAffectedStrokeIndex_ = strokes_.size();
     } else {
         // Fallback for eraser or if surfaces unavailable
-        needsStrokeRedraw_ = true;
+        markStrokeCachesDirty();
     }
 
     // Single-stroke append. The new stroke is the last element in
@@ -694,7 +702,7 @@ void SkiaDrawingEngine::clear() {
 
     commitDelta(std::move(delta));
 
-    needsStrokeRedraw_ = true;
+    markStrokeCachesDirty();
     needsEraserMaskRedraw_ = true;
 }
 
@@ -711,7 +719,7 @@ void SkiaDrawingEngine::undo() {
     bakedCircleCount_ = 0;
     clearActiveShapePreview();
     activeStrokeRenderer_->reset();
-    needsStrokeRedraw_ = true;
+    markStrokeCachesDirty();
     needsEraserMaskRedraw_ = true;
 }
 
@@ -728,7 +736,7 @@ void SkiaDrawingEngine::redo() {
     bakedCircleCount_ = 0;
     clearActiveShapePreview();
     activeStrokeRenderer_->reset();
-    needsStrokeRedraw_ = true;
+    markStrokeCachesDirty();
     needsEraserMaskRedraw_ = true;
 }
 
@@ -845,7 +853,7 @@ bool SkiaDrawingEngine::deserializeDrawing(const std::vector<uint8_t>& data) {
     // checkpoint -- the user wouldn't expect to undo past the load.
     undoStack_.clear();
     redoStack_.clear();
-    needsStrokeRedraw_ = true;
+    markStrokeCachesDirty();
     needsEraserMaskRedraw_ = true;
     return true;
 }

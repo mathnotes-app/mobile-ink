@@ -575,6 +575,11 @@ export const NativeInkCanvas = forwardRef<
     pdfBackgroundUri: props.pdfBackgroundUri,
     renderSuspended: props.renderSuspended,
     drawingPolicy: props.drawingPolicy,
+    renderScale: props.renderScale ?? 1,
+    renderViewportLeftRatio: props.renderViewportLeftRatio ?? 0,
+    renderViewportTopRatio: props.renderViewportTopRatio ?? 0,
+    renderViewportWidthRatio: props.renderViewportWidthRatio ?? 1,
+    renderViewportHeightRatio: props.renderViewportHeightRatio ?? 1,
     onPencilDoubleTap: props.onPencilDoubleTap,
     ...(supportsRenderBackendProp
       ? { renderBackend: props.renderBackend ?? DEFAULT_NATIVE_INK_RENDER_BACKEND }

@@ -353,6 +353,25 @@ void renderToCanvas(void* engine, void* canvas) {
     }
 }
 
+void setRenderViewport(
+    void* engine,
+    float renderScale,
+    float visibleLeft,
+    float visibleTop,
+    float visibleWidth,
+    float visibleHeight
+) {
+    if (engine) {
+        static_cast<SkiaDrawingEngine*>(engine)->setRenderViewport(
+            renderScale,
+            visibleLeft,
+            visibleTop,
+            visibleWidth,
+            visibleHeight
+        );
+    }
+}
+
 void* createGaneshMetalContext(void* devicePtr, void* commandQueuePtr) {
     if (!devicePtr || !commandQueuePtr) {
         return nullptr;

@@ -12,6 +12,9 @@
     "android": {
       "package": "io.mathnotes.mobileink.example"
     },
-    "plugins": ["expo-dev-client"]
+    "plugins": [
+      "expo-dev-client",
+      "./plugins/with-xcode-asset-symbol-workaround"
+    ]
   }
 }

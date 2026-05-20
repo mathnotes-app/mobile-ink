@@ -70,6 +70,16 @@ func isEmpty(_ engine: OpaquePointer) -> Bool
 @_silgen_name("renderToCanvas")
 func renderToCanvas(_ engine: OpaquePointer, _ canvas: OpaquePointer)
 
+@_silgen_name("setRenderViewport")
+func setRenderViewport(
+  _ engine: OpaquePointer,
+  _ renderScale: Float,
+  _ visibleLeft: Float,
+  _ visibleTop: Float,
+  _ visibleWidth: Float,
+  _ visibleHeight: Float
+)
+
 @_silgen_name("createGaneshMetalContext")
 func createGaneshMetalContext(_ device: UnsafeMutableRawPointer, _ commandQueue: UnsafeMutableRawPointer) -> OpaquePointer?
 

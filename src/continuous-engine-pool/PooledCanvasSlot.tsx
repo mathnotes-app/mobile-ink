@@ -19,6 +19,7 @@ import {
   OFFSCREEN_TOP,
   waitForNextFrame,
 } from "./helpers";
+import { getVisibleContentRect } from "../utils/viewportTransform";
 import type {
   ContinuousEnginePoolAssignment,
   ContinuousEnginePoolSlotRef,
@@ -40,6 +41,10 @@ type SlotFrame = {
 
 const PAGE_PREVIEW_CAPTURE_SCALE = 0.25;
 
+const clamp = (value: number, min: number, max: number) => (
+  Math.max(min, Math.min(max, value))
+);
+
 const hiddenSlotFrame = (height = 0): SlotFrame => ({
   top: OFFSCREEN_TOP,
   height,
@@ -50,7 +55,11 @@ const hiddenSlotFrame = (height = 0): SlotFrame => ({
 export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCanvasSlotProps>(
   function PooledCanvasSlot({
     poolIndex,
+    pageWidth,
     canvasHeight,
+    contentPadding,
+    viewportTransform,
+    renderScale,
     backgroundType,
     renderBackend,
     pdfBackgroundBaseUri,
@@ -157,6 +166,48 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
     const applyCurrentTool = useCallback(() => {
       applyToolState(getToolStateRef.current());
     }, [applyToolState]);
+
+    const renderViewport = useMemo(() => {
+      const pageIndex = slotFrame.top >= 0 && canvasHeight > 0
+        ? Math.round(slotFrame.top / canvasHeight)
+        : null;
+
+      if (!viewportTransform || pageIndex === null || pageWidth <= 0 || canvasHeight <= 0) {
+        return {
+          leftRatio: 0,
+          topRatio: 0,
+          widthRatio: 1,
+          heightRatio: 1,
+          intersectsViewport: true,
+        };
+      }
+
+      const visibleContentRect = getVisibleContentRect(viewportTransform);
+      const visibleLeft = visibleContentRect.left;
+      const visibleTop = visibleContentRect.top - contentPadding;
+      const visibleRight = visibleContentRect.right;
+      const visibleBottom = visibleContentRect.bottom - contentPadding;
+      const pageTop = pageIndex * canvasHeight;
+      const localLeft = clamp(visibleLeft, 0, pageWidth);
+      const localTop = clamp(visibleTop - pageTop, 0, canvasHeight);
+      const localRight = clamp(visibleRight, 0, pageWidth);
+      const localBottom = clamp(visibleBottom - pageTop, 0, canvasHeight);
+      const intersectsViewport = localRight > localLeft && localBottom > localTop;
+
+      return {
+        leftRatio: clamp(localLeft / pageWidth, 0, 1),
+        topRatio: clamp(localTop / canvasHeight, 0, 1),
+        widthRatio: clamp(Math.max(1, localRight - localLeft) / pageWidth, 0.001, 1),
+        heightRatio: clamp(Math.max(1, localBottom - localTop) / canvasHeight, 0.001, 1),
+        intersectsViewport,
+      };
+    }, [
+      canvasHeight,
+      contentPadding,
+      pageWidth,
+      slotFrame.top,
+      viewportTransform,
+    ]);
 
     const slotRef = useMemo<ContinuousEnginePoolSlotRef>(
       () => ({
@@ -597,6 +648,11 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
           style={styles.nativeCanvas}
           drawingPolicy={drawingPolicy}
           renderBackend={renderBackend}
+          renderScale={renderViewport.intersectsViewport ? renderScale : 1}
+          renderViewportLeftRatio={renderViewport.leftRatio}
+          renderViewportTopRatio={renderViewport.topRatio}
+          renderViewportWidthRatio={renderViewport.widthRatio}
+          renderViewportHeightRatio={renderViewport.heightRatio}
           onCanvasReady={handleNativeCanvasReady}
           onDrawingBegin={onDrawingBegin}
           onDrawingChange={handleDrawingChange}
@@ -608,7 +664,11 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
   },
 ), (prev, next) => (
   prev.poolIndex === next.poolIndex &&
+  prev.pageWidth === next.pageWidth &&
   prev.canvasHeight === next.canvasHeight &&
+  prev.contentPadding === next.contentPadding &&
+  prev.viewportTransform === next.viewportTransform &&
+  prev.renderScale === next.renderScale &&
   prev.backgroundType === next.backgroundType &&
   prev.renderBackend === next.renderBackend &&
   prev.pdfBackgroundBaseUri === next.pdfBackgroundBaseUri &&
