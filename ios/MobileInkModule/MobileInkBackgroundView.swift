@@ -1,5 +1,78 @@
 import UIKit
 
+private final class MobileInkPDFDocumentBox {
+  let document: CGPDFDocument
+
+  init(_ document: CGPDFDocument) {
+    self.document = document
+  }
+}
+
+private enum MobileInkPDFDocumentStore {
+  static let loadQueue = DispatchQueue(
+    label: "io.mathnotes.mobileink.pdf-document-load",
+    qos: .userInitiated
+  )
+
+  private static let cache: NSCache<NSString, MobileInkPDFDocumentBox> = {
+    let cache = NSCache<NSString, MobileInkPDFDocumentBox>()
+    cache.countLimit = 4
+    return cache
+  }()
+
+  static func document(for cleanUri: String) -> CGPDFDocument? {
+    let key = cleanUri as NSString
+    if let cached = cache.object(forKey: key)?.document {
+      return cached
+    }
+
+    guard let document = makeDocument(from: cleanUri) else {
+      return nil
+    }
+
+    cache.setObject(MobileInkPDFDocumentBox(document), forKey: key)
+    return document
+  }
+
+  private static func makeDocument(from cleanUri: String) -> CGPDFDocument? {
+    if cleanUri.hasPrefix("data:application/pdf;base64,") {
+      let base64String = String(cleanUri.dropFirst("data:application/pdf;base64,".count))
+      guard
+        let data = Data(base64Encoded: base64String),
+        let provider = CGDataProvider(data: data as CFData)
+      else {
+        return nil
+      }
+      return CGPDFDocument(provider)
+    }
+
+    if cleanUri.hasPrefix("file://") {
+      if let url = URL(string: cleanUri), let document = CGPDFDocument(url as CFURL) {
+        return document
+      }
+      let filePath = String(cleanUri.dropFirst("file://".count))
+      return CGPDFDocument(URL(fileURLWithPath: filePath) as CFURL)
+    }
+
+    if cleanUri.hasPrefix("/") {
+      return CGPDFDocument(URL(fileURLWithPath: cleanUri) as CFURL)
+    }
+
+    if cleanUri.hasPrefix("http://") || cleanUri.hasPrefix("https://") {
+      guard
+        let url = URL(string: cleanUri),
+        let data = try? Data(contentsOf: url),
+        let provider = CGDataProvider(data: data as CFData)
+      else {
+        return nil
+      }
+      return CGPDFDocument(provider)
+    }
+
+    return nil
+  }
+}
+
 /// A view that renders various background types for the native drawing canvas
 /// Supports plain, lined, grid, dotted, graph, and PDF backgrounds with caching
 @available(iOS 14.0, *)
@@ -320,32 +393,22 @@ class MobileInkBackgroundView: UIView {
 
     let pdfRect = pdfPage.getBoxRect(.mediaBox)
 
-    // Check for invalid mediaBox
     guard pdfRect.width > 0 && pdfRect.height > 0 else {
       context.restoreGState()
       return
     }
 
-    // Scale to fit while maintaining aspect ratio
     let scaleX = rect.width / pdfRect.width
     let scaleY = rect.height / pdfRect.height
     let scale = min(scaleX, scaleY)
-
-    // Calculate scaled dimensions
     let scaledWidth = pdfRect.width * scale
     let scaledHeight = pdfRect.height * scale
+    let offsetX = rect.minX + (rect.width - scaledWidth) / 2
+    let offsetY = rect.minY + (rect.height - scaledHeight) / 2
 
-    // Center the PDF
-    let offsetX = (rect.width - scaledWidth) / 2
-    let offsetY = (rect.height - scaledHeight) / 2
-
-    // Apply transforms to draw PDF correctly:
-    // 1. Move to where bottom-left corner should be (PDF origin is bottom-left)
-    // 2. Scale (with Y flip to convert PDF coords to UIKit coords)
     context.translateBy(x: offsetX - pdfRect.origin.x * scale,
                         y: offsetY + scaledHeight + pdfRect.origin.y * scale)
     context.scaleBy(x: scale, y: -scale)
-
     context.drawPDFPage(pdfPage)
 
     context.restoreGState()
@@ -501,26 +564,26 @@ class MobileInkBackgroundView: UIView {
   ) {
     completePdfLoad(true, pageNumber: pageNumber)
 
-    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-      let data = self?.loadPDFData(from: cleanUri)
+    MobileInkPDFDocumentStore.loadQueue.async {
+      let document = MobileInkPDFDocumentStore.document(for: cleanUri)
 
-      DispatchQueue.main.async {
+      DispatchQueue.main.async { [weak self] in
         guard let self = self else { return }
         guard requestToken == self.pdfLoadToken else {
           print("[MobileInkBackgroundView] Dropping stale PDF load for token \(requestToken)")
           return
         }
-        guard let data = data else {
+        guard let document = document else {
           self.failPdfLoad(
             requestToken: requestToken,
             uri: cleanUri,
             pageNumber: pageNumber,
-            reason: "pdf_data_unavailable"
+            reason: "pdf_document_unavailable"
           )
           return
         }
-        self.processPDFData(
-          data,
+        self.processPDFDocument(
+          document,
           pageNumber: pageNumber,
           requestedPageNumbers: requestedPageNumbers,
           uri: cleanUri,
@@ -530,37 +593,8 @@ class MobileInkBackgroundView: UIView {
     }
   }
 
-  private func loadPDFData(from cleanUri: String) -> Data? {
-    // Handle data URIs (base64)
-    if cleanUri.hasPrefix("data:application/pdf;base64,") {
-      let base64String = String(cleanUri.dropFirst("data:application/pdf;base64,".count))
-      return Data(base64Encoded: base64String)
-    }
-
-    // Handle file:// URLs
-    if cleanUri.hasPrefix("file://") {
-      let filePath = String(cleanUri.dropFirst("file://".count))
-      let url = URL(fileURLWithPath: filePath)
-      return try? Data(contentsOf: url)
-    }
-
-    // Handle raw file paths
-    if cleanUri.hasPrefix("/") {
-      let url = URL(fileURLWithPath: cleanUri)
-      return try? Data(contentsOf: url)
-    }
-
-    // Handle remote URLs
-    if cleanUri.hasPrefix("http://") || cleanUri.hasPrefix("https://") {
-      guard let url = URL(string: cleanUri) else { return nil }
-      return try? Data(contentsOf: url)
-    }
-
-    return nil
-  }
-
-  private func processPDFData(
-    _ data: Data,
+  private func processPDFDocument(
+    _ document: CGPDFDocument,
     pageNumber: Int,
     requestedPageNumbers: [Int],
     uri: String,
@@ -568,17 +602,6 @@ class MobileInkBackgroundView: UIView {
   ) {
     guard requestToken == pdfLoadToken else {
       print("[MobileInkBackgroundView] Ignoring stale PDF process request for token \(requestToken)")
-      return
-    }
-
-    guard let dataProvider = CGDataProvider(data: data as CFData),
-          let document = CGPDFDocument(dataProvider) else {
-      failPdfLoad(
-        requestToken: requestToken,
-        uri: uri,
-        pageNumber: pageNumber,
-        reason: "pdf_document_parse_failed"
-      )
       return
     }
 

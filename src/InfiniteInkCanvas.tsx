@@ -21,7 +21,7 @@ import {
   DEFAULT_NATIVE_INK_RENDER_BACKEND,
 } from "./benchmark";
 import ZoomableInkViewport from "./ZoomableInkViewport";
-import type { ZoomableInkViewportRef } from "./ZoomableInkViewport";
+import type { TouchExclusionRect, ZoomableInkViewportRef } from "./ZoomableInkViewport";
 import type { NativeSelectionBounds, NotebookPage } from "./types";
 import {
   DEFAULT_CONTENT_PADDING,
@@ -37,6 +37,7 @@ import {
 } from "./infinite-ink-canvas/notebookPages";
 import { PageBackgrounds, PageBreaks } from "./infinite-ink-canvas/PageStack";
 import { styles } from "./infinite-ink-canvas/styles";
+import { selectionBoundsToTouchRect } from "./infinite-ink-canvas/selectionTouchRects";
 import type {
   InfiniteInkCanvasProps,
   InfiniteInkCanvasRef,
@@ -46,6 +47,8 @@ import { getContinuousEnginePoolRange } from "./utils/continuousEnginePool";
 import { computeDataSignature } from "./utils/dataSignature";
 import {
   BLANK_PAGE_PAYLOAD,
+  createBlankPage,
+  pageHasContent,
   withSingleTrailingBlankPage,
 } from "./utils/pageGrowth";
 import {
@@ -59,7 +62,7 @@ export type {
   InfiniteInkViewportTransform,
 } from "./infinite-ink-canvas/types";
 
-const PAGE_PREVIEW_CAPTURE_SCALE = 0.25;
+const PAGE_PREVIEW_CAPTURE_SCALE = 0.5;
 
 const withCapturedPageData = (
   page: NotebookPage,
@@ -108,6 +111,7 @@ function InfiniteInkCanvasImpl(
     onPagesChange,
     onMotionStateChange,
     onPencilDoubleTap,
+    onTransformChange,
   }: InfiniteInkCanvasProps,
   ref: React.Ref<InfiniteInkCanvasRef>,
 ) {
@@ -119,6 +123,9 @@ function InfiniteInkCanvasImpl(
   const [nativeRenderScale, setNativeRenderScale] = useState(1);
   const pagesRef = useRef(pages);
   const currentPageIndexRef = useRef(0);
+  const [visibleBackgroundPageIndex, setVisibleBackgroundPageIndex] = useState(0);
+  const [selectionTouchRects, setSelectionTouchRects] = useState<TouchExclusionRect[]>([]);
+  const activeSelectionPageIdRef = useRef<string | null>(null);
   const toolStateRef = useRef(toolState);
   const isMovingRef = useRef(false);
   const latestTransformRef = useRef<InfiniteInkViewportTransform | null>(null);
@@ -189,6 +196,7 @@ function InfiniteInkCanvasImpl(
   const commitViewportPage = useCallback((pageIndex: number) => {
     const pageCount = pagesRef.current.length;
     const boundedPageIndex = Math.max(0, Math.min(pageCount - 1, pageIndex));
+    setVisibleBackgroundPageIndex(boundedPageIndex);
     setCurrentPage(boundedPageIndex);
     void assignEnginesToPage(boundedPageIndex);
   }, [assignEnginesToPage, setCurrentPage]);
@@ -235,20 +243,27 @@ function InfiniteInkCanvasImpl(
 
   const handleTransformChange = useCallback((transform: InfiniteInkViewportTransform) => {
     latestTransformRef.current = transform;
+    onTransformChange?.(transform);
+    const visiblePageIndex = getVisiblePageIndex(
+      transform,
+      pageHeight,
+      pagesRef.current.length,
+      contentPadding,
+    );
+    setVisibleBackgroundPageIndex(visiblePageIndex);
     if (isMovingRef.current) {
       return;
     }
 
     updateNativeRenderViewport(transform);
-    commitViewportPage(
-      getVisiblePageIndex(
-        transform,
-        pageHeight,
-        pagesRef.current.length,
-        contentPadding,
-      ),
-    );
-  }, [commitViewportPage, contentPadding, pageHeight, updateNativeRenderViewport]);
+    commitViewportPage(visiblePageIndex);
+  }, [
+    commitViewportPage,
+    contentPadding,
+    onTransformChange,
+    pageHeight,
+    updateNativeRenderViewport,
+  ]);
 
   const handleMotionStateChange = useCallback((isMoving: boolean) => {
     isMovingRef.current = isMoving;
@@ -311,8 +326,29 @@ function InfiniteInkCanvasImpl(
     count: number,
     bounds: NativeSelectionBounds | null,
   ) => {
+    if (count > 0 && bounds && bounds.width > 0 && bounds.height > 0) {
+      activeSelectionPageIdRef.current = pageId;
+      const pageIndex = pagesRef.current.findIndex((page) => page.id === pageId);
+      const transform = latestTransformRef.current;
+      const touchRect = selectionBoundsToTouchRect({
+        bounds,
+        pageIndex,
+        pageWidth,
+        pageHeight,
+        contentPadding,
+        containerWidth: transform?.containerWidth ?? pageWidth,
+      });
+      if (touchRect) {
+        setSelectionTouchRects([touchRect]);
+      } else {
+        setSelectionTouchRects([]);
+      }
+    } else if (activeSelectionPageIdRef.current === pageId) {
+      activeSelectionPageIdRef.current = null;
+      setSelectionTouchRects([]);
+    }
     onSelectionChange?.(pageId, count, bounds);
-  }, [onSelectionChange]);
+  }, [contentPadding, onSelectionChange, pageHeight, pageWidth]);
 
   const getActiveSlot = useCallback(() => {
     const lastEditedPageId = lastEditedPageIdRef.current;
@@ -376,6 +412,7 @@ function InfiniteInkCanvasImpl(
       Math.min(pagesRef.current.length - 1, pageIndex),
     );
     setCurrentPage(boundedPageIndex);
+    setVisibleBackgroundPageIndex(boundedPageIndex);
     void assignEnginesToPage(boundedPageIndex);
     viewportRef.current?.setTransform({
       scale: 1,
@@ -387,13 +424,21 @@ function InfiniteInkCanvasImpl(
 
   const addPage = useCallback(async () => {
     const capturedPages = await captureDirtyPages();
-    const trailingBlankPageIndex = Math.max(0, capturedPages.length - 1);
+    const lastPage = capturedPages[capturedPages.length - 1];
+    const pagesWithWritableBlank = lastPage && pageHasContent(lastPage, dirtyPageIdsRef.current)
+      ? [...capturedPages, createBlankPage(capturedPages.length)]
+      : capturedPages;
+    if (pagesWithWritableBlank !== capturedPages) {
+      replacePages(pagesWithWritableBlank);
+    }
+    const trailingBlankPageIndex = Math.max(0, pagesWithWritableBlank.length - 1);
     setCurrentPage(trailingBlankPageIndex);
     scrollToPage(trailingBlankPageIndex, true);
     void assignEnginesToPage(trailingBlankPageIndex);
   }, [
     assignEnginesToPage,
     captureDirtyPages,
+    replacePages,
     scrollToPage,
     setCurrentPage,
   ]);
@@ -413,8 +458,11 @@ function InfiniteInkCanvasImpl(
       const nextPages = withSingleTrailingBlankPage(parsed.pages.map(clonePage));
       dirtyPageIdsRef.current.clear();
       perPageSlotRefs.current.clear();
+      activeSelectionPageIdRef.current = null;
+      setSelectionTouchRects([]);
       replacePages(nextPages);
       setCurrentPage(0);
+      setVisibleBackgroundPageIndex(0);
       viewportRef.current?.setTransform({
         scale: 1,
         translateX: 0,
@@ -527,6 +575,8 @@ function InfiniteInkCanvasImpl(
         fingerDrawingEnabled={fingerDrawingEnabled}
         enableMomentumScroll={true}
         lockHorizontalPanNearFit={true}
+        blockedTouchRects={selectionTouchRects}
+        singleFingerPanBlocked={selectionTouchRects.length > 0}
         transformNotificationMinIntervalMs={80}
         onTransformChange={handleTransformChange}
         onMotionStateChange={handleMotionStateChange}
@@ -545,6 +595,7 @@ function InfiniteInkCanvasImpl(
               backgroundType={backgroundType}
               pdfBackgroundBaseUri={pdfBackgroundBaseUri}
               showPageLabels={showPageLabels}
+              visiblePageIndex={visibleBackgroundPageIndex}
             />
             <ContinuousEnginePool
               ref={enginePoolRef}

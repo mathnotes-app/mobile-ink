@@ -981,7 +981,8 @@ class MobileInkBridge: RCTEventEmitter {
       }
 
       // Load PDF document if URI is provided
-      var pdfDocument: PDFDocument? = nil
+      var cgPdfDocument: CGPDFDocument? = nil
+      var fallbackPdfDocument: PDFDocument? = nil
       var requestedPdfPage: Int? = nil  // For single-page export with #page=N fragment
       if !pdfBackgroundUri.isEmpty {
         // Parse #page=N fragment if present (1-indexed, convert to 0-indexed)
@@ -1007,11 +1008,15 @@ class MobileInkBridge: RCTEventEmitter {
           pdfUrl = URL(fileURLWithPath: cleanUri)
         }
         if let url = pdfUrl {
-          pdfDocument = PDFDocument(url: url)
-          if pdfDocument == nil {
+          cgPdfDocument = CGPDFDocument(url as CFURL)
+          if cgPdfDocument == nil {
+            fallbackPdfDocument = PDFDocument(url: url)
+          }
+          if cgPdfDocument == nil && fallbackPdfDocument == nil {
             print("[BatchExport] Failed to load PDF from: \(cleanUri)")
           } else {
-            print("[BatchExport] Loaded PDF with \(pdfDocument!.pageCount) pages from: \(url.lastPathComponent)")
+            let pageCount = cgPdfDocument?.numberOfPages ?? fallbackPdfDocument?.pageCount ?? 0
+            print("[BatchExport] Loaded PDF with \(pageCount) pages from: \(url.lastPathComponent)")
           }
         }
       }
@@ -1064,11 +1069,11 @@ class MobileInkBridge: RCTEventEmitter {
 
         // Render PDF page to RGBA if this page has PDF background
         if bgType == "pdf" {
-          if let pdf = pdfDocument {
-            // For single-page export with #page=N, use the requested page; otherwise use loop index
-            let pdfPageIndex = (numPages == 1 && requestedPdfPage != nil) ? requestedPdfPage! : i
-            if pdfPageIndex < pdf.pageCount, let pdfPage = pdf.page(at: pdfPageIndex) {
-              // Render PDF page to RGBA pixel buffer at canvas dimensions
+          let resolvedPageIndex = Int(resolvedPageIndices[i])
+          let pdfPageIndex = (numPages == 1 && requestedPdfPage != nil) ? requestedPdfPage! : resolvedPageIndex
+
+          if let pdf = cgPdfDocument {
+            if pdfPageIndex >= 0, pdfPageIndex < pdf.numberOfPages, let pdfPage = pdf.page(at: pdfPageIndex + 1) {
               if let (pixelPtr, pdfWidth, pdfHeight) = self.renderPdfPageToRgba(pdfPage, width: width, height: height) {
                 print("[BatchExport] Rendered PDF page \(i) at \(pdfWidth)x\(pdfHeight)")
                 pdfPixelDataPtrs.append(pixelPtr)
@@ -1081,7 +1086,26 @@ class MobileInkBridge: RCTEventEmitter {
                 pdfPixelHeights.append(0)
               }
             } else {
-              print("[BatchExport] PDF page \(i) not available (pdf has \(pdf.pageCount) pages)")
+              print("[BatchExport] PDF page \(pdfPageIndex) not available (pdf has \(pdf.numberOfPages) pages)")
+              pdfPixelDataPtrs.append(nil)
+              pdfPixelWidths.append(0)
+              pdfPixelHeights.append(0)
+            }
+          } else if let pdf = fallbackPdfDocument {
+            if pdfPageIndex >= 0, pdfPageIndex < pdf.pageCount, let pdfPage = pdf.page(at: pdfPageIndex), let cgPdfPage = pdfPage.pageRef {
+              if let (pixelPtr, pdfWidth, pdfHeight) = self.renderPdfPageToRgba(cgPdfPage, width: width, height: height) {
+                print("[BatchExport] Rendered PDF page \(i) at \(pdfWidth)x\(pdfHeight)")
+                pdfPixelDataPtrs.append(pixelPtr)
+                pdfPixelWidths.append(Int32(pdfWidth))
+                pdfPixelHeights.append(Int32(pdfHeight))
+              } else {
+                print("[BatchExport] Failed to render PDF page \(i)")
+                pdfPixelDataPtrs.append(nil)
+                pdfPixelWidths.append(0)
+                pdfPixelHeights.append(0)
+              }
+            } else {
+              print("[BatchExport] PDF page \(pdfPageIndex) not available (pdf has \(pdf.pageCount) pages)")
               pdfPixelDataPtrs.append(nil)
               pdfPixelWidths.append(0)
               pdfPixelHeights.append(0)
@@ -1185,13 +1209,8 @@ class MobileInkBridge: RCTEventEmitter {
   /// Render a PDF page to RGBA pixel buffer at canvas dimensions
   /// Returns tuple of (pixel data pointer, width, height) or nil on failure
   /// Rendered at 1x canvas size - Skia's scale transform handles the 2x export scaling
-  private func renderPdfPageToRgba(_ pdfPage: PDFPage, width: Int, height: Int) -> (UnsafeMutablePointer<UInt8>, Int, Int)? {
-    guard let cgPdfPage = pdfPage.pageRef else {
-      print("[BatchExport] Failed to get CGPDFPage from PDFPage")
-      return nil
-    }
-
-    let pdfRect = cgPdfPage.getBoxRect(.mediaBox)
+  private func renderPdfPageToRgba(_ pdfPage: CGPDFPage, width: Int, height: Int) -> (UnsafeMutablePointer<UInt8>, Int, Int)? {
+    let pdfRect = pdfPage.getBoxRect(.mediaBox)
 
     guard pdfRect.width > 0 && pdfRect.height > 0 else {
       print("[BatchExport] Invalid PDF mediaBox")
@@ -1201,11 +1220,6 @@ class MobileInkBridge: RCTEventEmitter {
     // Render at canvas dimensions (1x) - Skia will scale up during export
     let renderWidth = width
     let renderHeight = height
-
-    // Calculate scale to fit PDF in canvas while maintaining aspect ratio
-    let fitScaleX = CGFloat(width) / pdfRect.width
-    let fitScaleY = CGFloat(height) / pdfRect.height
-    let fitScale = min(fitScaleX, fitScaleY)
 
     // Create bitmap context with RGBA format
     let bytesPerPixel = 4
@@ -1238,24 +1252,19 @@ class MobileInkBridge: RCTEventEmitter {
     context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
     context.fill(CGRect(x: 0, y: 0, width: renderWidth, height: renderHeight))
 
-    // Calculate scaled dimensions
+    let fitScaleX = CGFloat(width) / pdfRect.width
+    let fitScaleY = CGFloat(height) / pdfRect.height
+    let fitScale = min(fitScaleX, fitScaleY)
     let scaledPdfWidth = pdfRect.width * fitScale
     let scaledPdfHeight = pdfRect.height * fitScale
-
-    // Center the PDF in the render area
     let offsetX = (CGFloat(renderWidth) - scaledPdfWidth) / 2
     let offsetY = (CGFloat(renderHeight) - scaledPdfHeight) / 2
 
-    // Draw PDF using the same transform as MobileInkBackgroundView (now context is top-left origin)
     context.saveGState()
-
-    // Apply the same transform as MobileInkBackgroundView uses
     context.translateBy(x: offsetX - pdfRect.origin.x * fitScale,
                         y: offsetY + scaledPdfHeight + pdfRect.origin.y * fitScale)
     context.scaleBy(x: fitScale, y: -fitScale)
-
-    context.drawPDFPage(cgPdfPage)
-
+    context.drawPDFPage(pdfPage)
     context.restoreGState()
 
     return (pixelData, renderWidth, renderHeight)

@@ -39,7 +39,7 @@ type SlotFrame = {
   pointerEvents: SlotPointerEvents;
 };
 
-const PAGE_PREVIEW_CAPTURE_SCALE = 0.25;
+const PAGE_PREVIEW_CAPTURE_SCALE = 0.5;
 
 const clamp = (value: number, min: number, max: number) => (
   Math.max(min, Math.min(max, value))
@@ -506,7 +506,6 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
 
     const release = useCallback(async () => {
       const nativeCanvas = canvasRef.current ?? lastAttachedCanvasRef.current;
-      const pageId = loadedPageIdRef.current;
       loadTokenRef.current += 1;
       unregisterCurrentPage();
       if (nativeCanvas) {
@@ -514,13 +513,15 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
           await nativeCanvas.stopBenchmarkRecording?.().catch(() => null);
           benchmarkRecordingActiveRef.current = false;
         }
-        await captureLoadedPage(pageId, nativeCanvas);
+        // Unmount often happens while React Native is tearing down the native view.
+        // Capturing at that point can crash below the JS layer; normal autosave and
+        // page-reassignment capture handle persistence while the slot is alive.
         await nativeCanvas.releaseEngine?.().catch(() => {});
         if (lastAttachedCanvasRef.current === nativeCanvas) {
           lastAttachedCanvasRef.current = null;
         }
       }
-    }, [captureLoadedPage, unregisterCurrentPage]);
+    }, [unregisterCurrentPage]);
 
     const startBenchmarkRecording = useCallback(async (
       options?: NativeInkBenchmarkRecordingOptions,

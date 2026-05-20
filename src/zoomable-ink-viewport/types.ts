@@ -59,6 +59,8 @@ export interface ZoomableInkViewportProps {
   enableMomentumScroll?: boolean;
   /** When false, pinch stays available but one/two-finger content pan is disabled. */
   panEnabled?: boolean;
+  /** In Pencil mode, keep one-finger movement on the child canvas while a native object is selected. */
+  singleFingerPanBlocked?: boolean;
   /** Locks small horizontal drift while continuous content is near fit scale. */
   lockHorizontalPanNearFit?: boolean;
   /** Reports viewport transform changes for virtualized layouts. */

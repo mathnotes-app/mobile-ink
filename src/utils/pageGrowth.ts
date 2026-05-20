@@ -19,6 +19,10 @@ export const isBlankPagePayload = (data?: string) => {
   return data.trim() === BLANK_PAGE_PAYLOAD;
 };
 
+export const pageHasPdfBackground = (page: NotebookPage) => (
+  typeof page.pdfPageNumber === "number" || page.pageType === "pdf"
+);
+
 export const pageHasContent = (
   page: NotebookPage,
   dirtyPageIds: Set<string> = new Set(),
@@ -28,6 +32,7 @@ export const pageHasContent = (
     !isBlankPagePayload(page.data) ||
     (Array.isArray(page.textBoxes) && page.textBoxes.length > 0) ||
     (Array.isArray(page.insertedElements) && page.insertedElements.length > 0) ||
+    pageHasPdfBackground(page) ||
     page.graphState != null
   );
 };
@@ -51,7 +56,13 @@ export const withSingleTrailingBlankPage = (
 ) => {
   const sourcePages = pages.length > 0 ? pages : [createBlankPage(0)];
   const lastContentPageIndex = getLastContentPageIndex(sourcePages, dirtyPageIds);
-  const desiredPageCount = Math.max(1, lastContentPageIndex + 2);
+  const lastContentPage = sourcePages[lastContentPageIndex];
+  const needsTrailingBlank =
+    !lastContentPage || !pageHasPdfBackground(lastContentPage);
+  const desiredPageCount = Math.max(
+    1,
+    lastContentPageIndex + (needsTrailingBlank ? 2 : 1),
+  );
 
   if (sourcePages.length === desiredPageCount) {
     return sourcePages;

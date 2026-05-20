@@ -63,4 +63,5 @@ export type InfiniteInkCanvasProps = {
   onPagesChange?: (pages: NotebookPage[]) => void;
   onMotionStateChange?: (isMoving: boolean) => void;
   onPencilDoubleTap?: (event: NativeInkPencilDoubleTapEvent) => void;
+  onTransformChange?: (transform: InfiniteInkViewportTransform) => void;
 };
