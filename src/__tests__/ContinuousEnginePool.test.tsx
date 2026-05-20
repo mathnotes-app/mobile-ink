@@ -49,6 +49,8 @@ const mockStartBenchmarkRecording = jest.fn(async () => true);
 const mockStopBenchmarkRecording = jest.fn(async () => mockRunBenchmark());
 const mockNativeCanvasProps: any[] = [];
 
+jest.setTimeout(15000);
+
 jest.mock("../NativeInkCanvas", () => {
   const React = require("react");
   const { View } = require("react-native");

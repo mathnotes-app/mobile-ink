@@ -2,6 +2,14 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [0.3.1] - 2026-05-20
+
+- Added crisp settled zoom rendering with scale-aware native drawables and cached stroke tiles.
+- Stabilized zoom viewport math so drawing coordinates stay aligned through fast zoom and pan cycles.
+- Capped high-zoom native drawable scale to keep Apple Pencil drawing responsive at deep zoom levels.
+- Improved large PDF notebook behavior, page background windowing, and selection gesture exclusion regions.
+- Fixed an iOS drawable resize recursion that could crash dev builds on launch.
+
 ## [0.3.0] - 2026-05-15
 
 - Added the Android native ink renderer with Skia Ganesh GPU rendering and React Native view integration.
