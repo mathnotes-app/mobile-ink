@@ -32,6 +32,20 @@ The goal is simple: make this the best community drawing engine for React Native
 
 mobile-ink is currently used in production in MathNotes: https://apps.apple.com/us/app/mathnotes-ai-notes-for-stem/id6751956086
 
+## Why Not Just Use Skia, PencilKit, Or A Web Canvas?
+
+Most drawing tools give you a place to capture or render ink. They do not give you the continuous notebook surface that makes a real notes app hard: page pooling, long-document scrolling, zoom, selection, serialization, previews, native memory pressure handling, and cross-platform behavior.
+
+Mobile Ink is for React Native teams building serious handwritten note-taking, whiteboard, PDF annotation, or infinite-canvas apps that need native mobile ink behavior instead of a simple doodle box. If you only need one small drawing view, this may be more engine than you need. If you need a real notes-app canvas with long documents, zooming, scrolling, selection, save/load, and native rendering, Mobile Ink starts where lower-level drawing libraries stop.
+
+| Option | What you get | What you still have to build |
+| --- | --- | --- |
+| PencilKit | Excellent iOS ink surface | React Native integration, Android support, continuous notebooks, page pooling, app-owned serialization, and cross-platform behavior |
+| React Native Skia | Powerful rendering primitives | Pencil/stylus input, stroke model, eraser, selection, zoom physics, native page pooling, previews, and the continuous canvas |
+| Web canvas libraries | Fast prototype path | Native Pencil feel, mobile memory handling, PDF-scale notebooks, native page virtualization, and production mobile performance |
+| Custom native module | Full control | Rendering, gestures, serialization, page pooling, previews, long-document interaction, and Android/iOS parity |
+| Mobile Ink | Continuous notebook engine plus ink primitives | App-specific storage, UI chrome, sync, document model, and product workflows |
+
 ## Capability Snapshot
 
 | Area | Current support |

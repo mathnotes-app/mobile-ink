@@ -94,7 +94,13 @@
     "handwriting",
     "notes",
     "infinite-canvas",
-    "notebook"
+    "notebook",
+    "react-native-skia",
+    "expo",
+    "android",
+    "handwriting-canvas",
+    "apple-pencil-support",
+    "native-module"
   ],
   "publishConfig": {
     "access": "public"
