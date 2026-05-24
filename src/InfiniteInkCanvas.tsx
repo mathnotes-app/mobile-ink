@@ -112,6 +112,7 @@ function InfiniteInkCanvasImpl(
     onMotionStateChange,
     onPencilDoubleTap,
     onTransformChange,
+    transformNotificationMinIntervalMs = 16,
   }: InfiniteInkCanvasProps,
   ref: React.Ref<InfiniteInkCanvasRef>,
 ) {
@@ -577,7 +578,7 @@ function InfiniteInkCanvasImpl(
         lockHorizontalPanNearFit={true}
         blockedTouchRects={selectionTouchRects}
         singleFingerPanBlocked={selectionTouchRects.length > 0}
-        transformNotificationMinIntervalMs={80}
+        transformNotificationMinIntervalMs={transformNotificationMinIntervalMs}
         onTransformChange={handleTransformChange}
         onMotionStateChange={handleMotionStateChange}
       >
