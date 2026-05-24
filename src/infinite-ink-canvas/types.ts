@@ -64,4 +64,12 @@ export type InfiniteInkCanvasProps = {
   onMotionStateChange?: (isMoving: boolean) => void;
   onPencilDoubleTap?: (event: NativeInkPencilDoubleTapEvent) => void;
   onTransformChange?: (transform: InfiniteInkViewportTransform) => void;
+  /**
+   * Minimum time between JS viewport transform notifications.
+   *
+   * The canvas itself still scrolls on the UI thread. Lower this when app-side
+   * overlays need to stay visually attached to the transformed page. Defaults
+   * to 16ms.
+   */
+  transformNotificationMinIntervalMs?: number;
 };
