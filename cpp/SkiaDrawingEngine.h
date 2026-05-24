@@ -144,7 +144,9 @@ private:
     // emit one PixelErase delta covering the whole drag. Reset at the
     // start of each eraser touch.
     std::vector<StrokeDelta::PixelEraseEntry> pendingPixelEraseEntries_;
+    std::vector<EraserCircle> pendingPixelEraserCircles_;
     void recordPixelEraseCircleAdded(size_t strokeIndex, const EraserCircle& circle);
+    bool applyPendingPixelEraseToStrokes();
 
     int width_;
     int height_;
@@ -308,9 +310,11 @@ private:
     bool updateActiveShapePreviewForPoint(float x, float y);
     void redrawStrokes();
     void markStrokeCachesDirty();
+    void invalidateAllStrokeTiles();
     void invalidateStrokeTilesForRect(const SkRect& bounds);
     void renderScaleAwareStrokes(SkCanvas* canvas);
     void renderActiveContent(SkCanvas* canvas, bool useIncrementalActiveSurface);
+    void renderActivePixelEraserCutout(SkCanvas* canvas);
     sk_sp<SkImage> renderStrokeTile(const StrokeTileKey& key, int tileWidth, int tileHeight, float scale);
     void pruneStrokeTileCache();
     void redrawEraserMask();  // Dual-surface: only redraws eraser circles to mask

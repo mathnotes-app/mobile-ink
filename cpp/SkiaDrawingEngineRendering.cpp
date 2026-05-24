@@ -87,6 +87,15 @@ void SkiaDrawingEngine::markStrokeCachesDirty() {
     }
 }
 
+void SkiaDrawingEngine::invalidateAllStrokeTiles() {
+    strokeTileEpoch_++;
+    if (strokeTileEpoch_ == 0) {
+        strokeTileEpoch_ = 1;
+    }
+    strokeTileCache_.clear();
+    strokeTileCacheBytes_ = 0;
+}
+
 void SkiaDrawingEngine::invalidateStrokeTilesForRect(const SkRect& bounds) {
     if (strokeTileCache_.empty() || bounds.isEmpty()) {
         return;
@@ -169,6 +178,25 @@ void SkiaDrawingEngine::renderStrokeGeometry(SkCanvas* canvas, const Stroke& str
             ? SkPaint::kRound_Cap
             : SkPaint::kButt_Cap);
         canvas->drawPath(shapePath, shapePaint);
+        return;
+    }
+
+    if (stroke.toolType == "highlighter" || stroke.toolType == "marker") {
+        SkPath centerPath = stroke.path;
+        if (centerPath.isEmpty()) {
+            smoothPath(stroke.points, centerPath);
+        }
+        if (centerPath.isEmpty()) {
+            return;
+        }
+
+        SkPaint strokePaint = paint;
+        strokePaint.setStyle(SkPaint::kStroke_Style);
+        strokePaint.setStrokeWidth(averageCalculatedWidth(stroke.points));
+        strokePaint.setStrokeCap(SkPaint::kRound_Cap);
+        strokePaint.setStrokeJoin(SkPaint::kRound_Join);
+        strokePaint.setAntiAlias(true);
+        canvas->drawPath(centerPath, strokePaint);
         return;
     }
 
@@ -439,8 +467,22 @@ void SkiaDrawingEngine::renderActiveContent(SkCanvas* canvas, bool useIncrementa
 
         renderStrokeGeometry(canvas, previewStroke, previewPaint);
     } else if (currentPoints_.size() >= 2 && currentTool_ != "select" && currentTool_ != "eraser") {
-        if (useIncrementalActiveSurface) {
-            activeStrokeRenderer_->renderIncremental(canvas, currentPoints_, currentPaint_, currentTool_);
+        if (currentTool_ == "highlighter" || currentTool_ == "marker") {
+            Stroke activeStroke;
+            activeStroke.points = currentPoints_;
+            activeStroke.paint = currentPaint_;
+            activeStroke.toolType = currentTool_;
+            SkPaint previewPaint = currentPaint_;
+            previewPaint.setBlendMode(SkBlendMode::kSrcOver);
+            renderStrokeGeometry(canvas, activeStroke, previewPaint);
+        } else if (useIncrementalActiveSurface) {
+            activeStrokeRenderer_->renderIncremental(
+                canvas,
+                currentPoints_,
+                currentPaint_,
+                currentTool_,
+                renderScale_
+            );
         } else {
             Stroke activeStroke;
             activeStroke.points = currentPoints_;
@@ -449,6 +491,49 @@ void SkiaDrawingEngine::renderActiveContent(SkCanvas* canvas, bool useIncrementa
             renderStrokeGeometry(canvas, activeStroke, currentPaint_);
         }
     }
+}
+
+void SkiaDrawingEngine::renderActivePixelEraserCutout(SkCanvas* canvas) {
+    if (!canvas
+        || currentTool_ != "eraser"
+        || eraserMode_ != "pixel"
+        || pendingPixelEraserCircles_.empty()) {
+        return;
+    }
+
+    SkPath eraserPath;
+    for (const auto& circle : pendingPixelEraserCircles_) {
+        eraserPath.addCircle(circle.x, circle.y, circle.radius);
+    }
+    if (eraserPath.isEmpty()) {
+        return;
+    }
+
+    if (backgroundType_ == "pdf" && !pdfBackgroundImage_) {
+        SkPaint clearPaint;
+        clearPaint.setBlendMode(SkBlendMode::kClear);
+        clearPaint.setAntiAlias(true);
+        canvas->drawPath(eraserPath, clearPaint);
+        return;
+    }
+
+    canvas->save();
+    canvas->clipPath(eraserPath, SkClipOp::kIntersect, true);
+    if (backgroundType_ == "pdf" || backgroundType_ == "plain") {
+        canvas->drawColor(SK_ColorWHITE);
+    }
+
+    if (backgroundType_ != "pdf" || pdfBackgroundImage_) {
+        backgroundRenderer_->drawBackground(
+            canvas,
+            backgroundType_,
+            width_,
+            height_,
+            pdfBackgroundImage_,
+            backgroundOriginY_
+        );
+    }
+    canvas->restore();
 }
 
 void SkiaDrawingEngine::redrawEraserMask() {
@@ -512,7 +597,8 @@ void SkiaDrawingEngine::render(SkCanvas* canvas) {
 
         canvas->save();
         canvas->scale(renderScale_, renderScale_);
-        renderActiveContent(canvas, false);
+        renderActiveContent(canvas, true);
+        renderActivePixelEraserCutout(canvas);
 
         if (showEraserCursor_ && eraserCursorRadius_ > 0) {
             SkPaint cursorPaint;
@@ -651,8 +737,15 @@ void SkiaDrawingEngine::render(SkCanvas* canvas) {
                         canvas->restore();
                     }
                 }
+            } else if (currentTool_ == "eraser"
+                && eraserMode_ == "pixel"
+                && !currentPoints_.empty()
+                && strokeSurface_) {
+                strokeSurface_->draw(canvas, 0, 0);
             } else if (cachedStrokeSnapshot_) {
                 canvas->drawImage(cachedStrokeSnapshot_, 0, 0);
+            } else if (strokeSurface_) {
+                strokeSurface_->draw(canvas, 0, 0);
             }
         }
     }

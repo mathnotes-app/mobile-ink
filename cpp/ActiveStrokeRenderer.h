@@ -41,7 +41,8 @@ public:
         SkCanvas* canvas,
         const std::vector<Point>& points,
         const SkPaint& paint,
-        const std::string& toolType
+        const std::string& toolType,
+        float surfaceScale = 1.0f
     );
 
     /**
@@ -59,6 +60,8 @@ public:
      */
     sk_sp<SkImage> getSnapshot() const { return cachedActiveSnapshot_; }
 
+    void drawSnapshot(SkCanvas* canvas) const;
+
     /**
      * Get the last rendered input index
      */
@@ -66,6 +69,9 @@ public:
 
 private:
     PathRenderer* pathRenderer_;
+    int logicalWidth_;
+    int logicalHeight_;
+    float surfaceScale_ = 1.0f;
 
     // Active stroke surface for incremental rendering
     sk_sp<SkSurface> activeStrokeSurface_;
@@ -77,6 +83,9 @@ private:
     SkPoint lastLeftEdge_, lastRightEdge_;
     bool hasLastEdge_;
     float lastHalfWidth_;  // For calligraphy width continuity
+
+    void ensureSurfaceScale(float surfaceScale);
+    void resetIncrementalState();
 
     static constexpr size_t OVERLAP = 2;  // Spline overlap for Catmull-Rom
 };

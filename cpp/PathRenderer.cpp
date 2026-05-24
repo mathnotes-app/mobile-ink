@@ -90,24 +90,10 @@ void PathRenderer::drawVariableWidthPath(
         fillPaint.setAlpha(static_cast<uint8_t>(baseAlpha * pressureAlphaMod));
     }
 
-    // For multiply blend (highlighter), draw individual segments so overlaps darken properly
-    // For other blend modes, draw as single path for performance
-    bool isMultiplyBlend = (fillPaint.asBlendMode() == SkBlendMode::kMultiply);
-
-    if (isMultiplyBlend && leftEdge.size() > 1) {
-        // Draw as individual quad segments - each segment composites separately
-        // This makes self-overlapping strokes darken at intersections
-        for (size_t i = 0; i < leftEdge.size() - 1; i++) {
-            SkPath segmentPath;
-            segmentPath.moveTo(leftEdge[i]);
-            segmentPath.lineTo(leftEdge[i + 1]);
-            segmentPath.lineTo(rightEdge[i + 1]);
-            segmentPath.lineTo(rightEdge[i]);
-            segmentPath.close();
-            canvas->drawPath(segmentPath, fillPaint);
-        }
-    } else if (!leftEdge.empty() && !rightEdge.empty()) {
-        // Build single filled path with rounded caps for non-multiply blends
+    if (!leftEdge.empty() && !rightEdge.empty()) {
+        // Build a single filled path. Drawing highlighter/marker as separate
+        // multiply-blended segments creates visible tabs at high zoom and costs
+        // one draw call per segment.
         strokePath.moveTo(leftEdge[0]);
 
         // Draw along left edge
@@ -361,8 +347,6 @@ IncrementalResult PathRenderer::drawVariableWidthPathIncremental(
     IncrementalResult result = {};
     if (points.empty() || points.size() < 2 || !canvas) return result;
 
-    SkColor baseColor = basePaint.getColor();
-
     // Generate smoothed points using helper
     std::vector<Point> smoothedPoints;
     interpolateSplinePoints(
@@ -394,8 +378,7 @@ IncrementalResult PathRenderer::drawVariableWidthPathIncremental(
     }
     path.close();
 
-    SkPaint fillPaint;
-    fillPaint.setColor(baseColor);
+    SkPaint fillPaint = basePaint;
     fillPaint.setStyle(SkPaint::kFill_Style);
     fillPaint.setAntiAlias(true);
     canvas->drawPath(path, fillPaint);

@@ -144,6 +144,8 @@ void SkiaDrawingEngine::touchBegan(
     currentPoints_.clear();
     currentPath_.reset();
     predictedPointCount_ = 0;  // Reset prediction tracking for new stroke
+    pendingPixelEraseEntries_.clear();
+    pendingPixelEraserCircles_.clear();
     clearActiveShapePreview();
 
     // Reset incremental active stroke state
@@ -335,17 +337,17 @@ void SkiaDrawingEngine::touchEnded(long timestamp) {
     if (currentTool_ == "eraser" && eraserMode_ == "object") {
         eraseObjects();
     } else if (currentTool_ == "eraser" && eraserMode_ == "pixel") {
-        // Commit a single PixelErase delta covering every (stroke, circle)
-        // pair that was added during this drag. pendingPixelEraseEntries_
-        // was populated incrementally by recordPixelEraseCircleAdded
-        // during applyPixelEraserAt calls. Reset for the next drag.
+        applyPendingPixelEraseToStrokes();
         if (!pendingPixelEraseEntries_.empty()) {
             StrokeDelta delta;
             delta.kind = StrokeDelta::Kind::PixelErase;
             delta.pixelEraseEntries = std::move(pendingPixelEraseEntries_);
             commitDelta(std::move(delta));
+            cachedStrokeSnapshot_ = nullptr;
+            invalidateAllStrokeTiles();
         }
         pendingPixelEraseEntries_.clear();
+        pendingPixelEraserCircles_.clear();
 
         // DON'T set needsStrokeRedraw_ - kClear visual is already correct
         // Full redraw only needed on undo/redo/deserialize
@@ -616,7 +618,9 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
     if (strokeSurface_ && currentTool_ != "eraser") {
         SkCanvas* strokeCanvas = strokeSurface_->getCanvas();
 
-        if (isRecognizedShapeToolType(stroke.toolType)) {
+        if (isRecognizedShapeToolType(stroke.toolType)
+            || stroke.toolType == "highlighter"
+            || stroke.toolType == "marker") {
             SkPaint strokePaint = stroke.paint;
             if (!stroke.isEraser) {
                 uint8_t baseAlpha = stroke.paint.getAlpha();
@@ -630,10 +634,7 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
             }
 
             // Composite active stroke onto persistent stroke surface
-            sk_sp<SkImage> activeImage = activeStrokeRenderer_->getSnapshot();
-            if (activeImage) {
-                strokeCanvas->drawImage(activeImage, 0, 0);
-            }
+            activeStrokeRenderer_->drawSnapshot(strokeCanvas);
         }
 
         // Update cached snapshot
