@@ -54,7 +54,19 @@ struct Stroke {
     // Ensure cachedEraserPath is up-to-date with erasedBy circles
     // Builds stroked path matching EraserRenderer::drawEraserCirclesAsStrokes
     void ensureEraserCacheValid() const;
+
+    // True if any point survives all erasedBy circles (accounting for the
+    // rendered stroke radius). Source of truth for cachedHasVisiblePoints.
+    bool hasVisiblePoints() const;
 };
+
+// Zoom range the engine renders at. setRenderViewport clamps and buckets
+// into this range; ActiveStrokeRenderer anchors its preview surface with
+// the same bounds so the two never diverge.
+constexpr float kMinimumRenderScale = 1.0f;
+constexpr float kMaximumRenderScale = 5.0f;
+// Scales at or below this render 1:1; above it the scale-aware paths kick in.
+constexpr float kIdentityRenderScaleThreshold = 1.01f;
 
 // Delta-based history. Each entry describes ONE operation that was
 // applied to strokes_, sized in proportion to the operation -- a single

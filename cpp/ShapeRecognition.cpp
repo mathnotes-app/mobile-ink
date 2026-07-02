@@ -17,6 +17,10 @@ bool isRecognizedShapeToolType(const std::string& toolType) {
         || toolType == "shape-polygon";
 }
 
+bool isCenterlineStrokedToolType(const std::string& toolType) {
+    return toolType == "highlighter" || toolType == "marker";
+}
+
 bool buildRecognizedShapePath(
     const std::string& toolType,
     const std::vector<Point>& points,

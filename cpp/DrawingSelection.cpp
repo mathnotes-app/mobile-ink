@@ -28,29 +28,6 @@ static bool isPointInErasedRegion(float x, float y, const Stroke& stroke) {
     return false;
 }
 
-// Helper: Check if a stroke has any visible (non-erased) points
-static bool hasVisiblePoints(const Stroke& stroke) {
-    if (stroke.erasedBy.empty()) return true;  // No erasure = fully visible
-
-    // Check if any stroke point is outside all eraser circles
-    for (const auto& pt : stroke.points) {
-        bool pointVisible = true;
-        for (const auto& circle : stroke.erasedBy) {
-            float dx = pt.x - circle.x;
-            float dy = pt.y - circle.y;
-            // Use stroke width to check if the rendered point would be visible
-            float strokeRadius = pt.calculatedWidth / 2.0f;
-            float totalRadius = circle.radius + strokeRadius;
-            if (dx*dx + dy*dy <= totalRadius * totalRadius) {
-                pointVisible = false;
-                break;
-            }
-        }
-        if (pointVisible) return true;  // Found at least one visible point
-    }
-    return false;  // All points are erased
-}
-
 bool DrawingSelection::selectStrokeAtMatching(
     float x, float y,
     std::vector<Stroke>& strokes,

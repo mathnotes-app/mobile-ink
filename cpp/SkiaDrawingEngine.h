@@ -314,8 +314,15 @@ private:
     void markStrokeCachesDirty();
     void invalidateStrokeTilesForRect(const SkRect& bounds);
     void renderScaleAwareStrokes(SkCanvas* canvas);
-    void renderActiveContent(SkCanvas* canvas, bool useIncrementalActiveSurface);
-    void renderActivePixelEraserCutout(SkCanvas* canvas);
+    void renderActiveContent(SkCanvas* canvas);
+    // Draw points as a single constant-width stroked centerline (highlighter/
+    // marker). Uses cachedPath when non-empty, else smooths from points.
+    void drawCenterlineStrokePath(
+        SkCanvas* canvas,
+        const std::vector<Point>& points,
+        const SkPath& cachedPath,
+        const SkPaint& paint
+    );
     sk_sp<SkImage> renderStrokeTile(const StrokeTileKey& key, int tileWidth, int tileHeight, float scale);
     void pruneStrokeTileCache();
     void redrawEraserMask();  // Dual-surface: only redraws eraser circles to mask
@@ -329,7 +336,8 @@ private:
 
     // PencilKit-style pixel eraser: immediately splits strokes at eraser point
     // Returns true if any strokes were modified
-    bool applyPixelEraserAt(float x, float y, float radius);
+    void applyPixelEraserAt(float x, float y, float radius);
+    void resetPendingPixelErase();
 
     mutable std::recursive_mutex stateMutex_;
 };

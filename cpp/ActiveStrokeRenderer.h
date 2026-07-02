@@ -106,9 +106,10 @@ private:
     std::vector<Point> overlapBuffer_;
     SkPoint lastLeftEdge_, lastRightEdge_;
     bool hasLastEdge_;
-    float lastHalfWidth_;  // For calligraphy width continuity
 
     void ensureViewportAlignment(const ActiveStrokeViewport& viewport);
+    // Maps logical coordinates onto the viewport-anchored surface. Callers
+    // wrap the call in SkAutoCanvasRestore.
     void applySurfaceTransform(SkCanvas* surfaceCanvas) const;
     void resetIncrementalState();
 

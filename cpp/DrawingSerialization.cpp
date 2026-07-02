@@ -313,25 +313,7 @@ bool DrawingSerialization::deserialize(
             }
 
             // Compute cached visibility for selection optimization
-            if (!stroke.erasedBy.empty()) {
-                stroke.cachedHasVisiblePoints = false;
-                for (const auto& pt : stroke.points) {
-                    bool pointVisible = true;
-                    for (const auto& circle : stroke.erasedBy) {
-                        float dx = pt.x - circle.x;
-                        float dy = pt.y - circle.y;
-                        float totalRadius = circle.radius + pt.calculatedWidth / 2.0f;
-                        if (dx * dx + dy * dy <= totalRadius * totalRadius) {
-                            pointVisible = false;
-                            break;
-                        }
-                    }
-                    if (pointVisible) {
-                        stroke.cachedHasVisiblePoints = true;
-                        break;
-                    }
-                }
-            }
+            stroke.cachedHasVisiblePoints = stroke.hasVisiblePoints();
         }
         // Version < 4: erasedBy stays empty (no per-stroke eraser data)
 

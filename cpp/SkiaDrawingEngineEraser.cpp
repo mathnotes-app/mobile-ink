@@ -1,7 +1,6 @@
 #include "SkiaDrawingEngine.h"
 
 #include "EraserRenderer.h"
-#include "ShapeRecognition.h"
 #include "StrokeSplitter.h"
 
 #include <algorithm>
@@ -107,7 +106,13 @@ void SkiaDrawingEngine::bakeEraserCircles() {
     printf("[C++] bakeEraserCircles: Baked %zu circles total\n", bakedCircleCount_);
 }
 
-bool SkiaDrawingEngine::applyPixelEraserAt(float eraserX, float eraserY, float radius) {
+void SkiaDrawingEngine::resetPendingPixelErase() {
+    pendingPixelEraseEntries_.clear();
+    pendingPixelEraserCircles_.clear();
+    pendingPixelEraserPath_.reset();
+}
+
+void SkiaDrawingEngine::applyPixelEraserAt(float eraserX, float eraserY, float radius) {
     // Build list of circles to add (may include interpolated circles for full coverage)
     std::vector<EraserCircle> circlesToAdd;
     circlesToAdd.push_back({eraserX, eraserY, radius});
@@ -166,7 +171,9 @@ bool SkiaDrawingEngine::applyPixelEraserAt(float eraserX, float eraserY, float r
         }
 
         // Keep the live surface hot during the drag. Snapshotting here forces
-        // full-surface work per input sample; touchEnded refreshes caches.
+        // full-surface work per input sample; the snapshot is invalidated so
+        // render() falls back to drawing the surface directly.
+        cachedStrokeSnapshot_ = nullptr;
     }
 
     // Track position for next call
@@ -174,8 +181,6 @@ bool SkiaDrawingEngine::applyPixelEraserAt(float eraserX, float eraserY, float r
     lastEraserY_ = eraserY;
     lastEraserRadius_ = radius;
     hasLastEraserPoint_ = true;
-
-    return true;
 }
 
 bool SkiaDrawingEngine::applyPendingPixelEraseToStrokes() {
@@ -183,9 +188,14 @@ bool SkiaDrawingEngine::applyPendingPixelEraseToStrokes() {
         return false;
     }
 
-    SkRect eraseBounds = SkRect::MakeEmpty();
+    // The pending path is exactly the pending circles, so its bounds are the
+    // union of their bounds.
+    const SkRect eraseBounds = pendingPixelEraserPath_.getBounds();
+
+    std::vector<SkRect> circleBounds;
+    circleBounds.reserve(pendingPixelEraserCircles_.size());
     for (const auto& circle : pendingPixelEraserCircles_) {
-        eraseBounds.join(SkRect::MakeLTRB(
+        circleBounds.push_back(SkRect::MakeLTRB(
             circle.x - circle.radius,
             circle.y - circle.radius,
             circle.x + circle.radius,
@@ -202,23 +212,18 @@ bool SkiaDrawingEngine::applyPendingPixelEraseToStrokes() {
         }
 
         SkRect bounds = stroke.path.getBounds();
-        const float strokeOutset = std::max(8.0f, averageCalculatedWidth(stroke.points));
+        // Conservative O(1) outset covering the rendered stroke width;
+        // per-circle bounds below already include the eraser radius.
+        const float strokeOutset = std::max(8.0f, stroke.paint.getStrokeWidth() * 2.0f);
         bounds.outset(strokeOutset, strokeOutset);
         if (!bounds.intersects(eraseBounds)) {
             continue;
         }
 
         std::vector<EraserCircle> circlesForStroke;
-        circlesForStroke.reserve(pendingPixelEraserCircles_.size());
-        for (const auto& circle : pendingPixelEraserCircles_) {
-            SkRect circleBounds = SkRect::MakeLTRB(
-                circle.x - circle.radius,
-                circle.y - circle.radius,
-                circle.x + circle.radius,
-                circle.y + circle.radius
-            );
-            if (bounds.intersects(circleBounds)) {
-                circlesForStroke.push_back(circle);
+        for (size_t i = 0; i < pendingPixelEraserCircles_.size(); ++i) {
+            if (bounds.intersects(circleBounds[i])) {
+                circlesForStroke.push_back(pendingPixelEraserCircles_[i]);
             }
         }
         if (circlesForStroke.empty()) {
@@ -234,24 +239,7 @@ bool SkiaDrawingEngine::applyPendingPixelEraseToStrokes() {
         // Refresh the visibility cache once per gesture so fully-erased
         // strokes stop responding to selection.
         if (stroke.cachedHasVisiblePoints) {
-            bool hasVisible = false;
-            for (const auto& pt : stroke.points) {
-                bool pointVisible = true;
-                for (const auto& circle : stroke.erasedBy) {
-                    float dx = pt.x - circle.x;
-                    float dy = pt.y - circle.y;
-                    float totalRadius = circle.radius + pt.calculatedWidth / 2.0f;
-                    if (dx * dx + dy * dy <= totalRadius * totalRadius) {
-                        pointVisible = false;
-                        break;
-                    }
-                }
-                if (pointVisible) {
-                    hasVisible = true;
-                    break;
-                }
-            }
-            stroke.cachedHasVisiblePoints = hasVisible;
+            stroke.cachedHasVisiblePoints = stroke.hasVisiblePoints();
         }
 
         StrokeDelta::PixelEraseEntry entry;

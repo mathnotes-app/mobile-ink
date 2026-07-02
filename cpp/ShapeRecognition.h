@@ -15,6 +15,10 @@ struct ShapeCandidate {
 
 bool isRecognizedShapeToolType(const std::string& toolType);
 
+// Tools rendered as a single constant-width stroked centerline path
+// (translucent tools where per-segment compositing would show seams).
+bool isCenterlineStrokedToolType(const std::string& toolType);
+
 bool buildRecognizedShapePath(
     const std::string& toolType,
     const std::vector<Point>& points,
