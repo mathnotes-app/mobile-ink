@@ -87,15 +87,6 @@ void SkiaDrawingEngine::markStrokeCachesDirty() {
     }
 }
 
-void SkiaDrawingEngine::invalidateAllStrokeTiles() {
-    strokeTileEpoch_++;
-    if (strokeTileEpoch_ == 0) {
-        strokeTileEpoch_ = 1;
-    }
-    strokeTileCache_.clear();
-    strokeTileCacheBytes_ = 0;
-}
-
 void SkiaDrawingEngine::invalidateStrokeTilesForRect(const SkRect& bounds) {
     if (strokeTileCache_.empty() || bounds.isEmpty()) {
         return;
@@ -476,12 +467,18 @@ void SkiaDrawingEngine::renderActiveContent(SkCanvas* canvas, bool useIncrementa
             previewPaint.setBlendMode(SkBlendMode::kSrcOver);
             renderStrokeGeometry(canvas, activeStroke, previewPaint);
         } else if (useIncrementalActiveSurface) {
+            ActiveStrokeViewport viewport;
+            viewport.scale = renderScale_;
+            viewport.left = visibleLeft_;
+            viewport.top = visibleTop_;
+            viewport.width = visibleWidth_;
+            viewport.height = visibleHeight_;
             activeStrokeRenderer_->renderIncremental(
                 canvas,
                 currentPoints_,
                 currentPaint_,
                 currentTool_,
-                renderScale_
+                viewport
             );
         } else {
             Stroke activeStroke;
@@ -497,15 +494,7 @@ void SkiaDrawingEngine::renderActivePixelEraserCutout(SkCanvas* canvas) {
     if (!canvas
         || currentTool_ != "eraser"
         || eraserMode_ != "pixel"
-        || pendingPixelEraserCircles_.empty()) {
-        return;
-    }
-
-    SkPath eraserPath;
-    for (const auto& circle : pendingPixelEraserCircles_) {
-        eraserPath.addCircle(circle.x, circle.y, circle.radius);
-    }
-    if (eraserPath.isEmpty()) {
+        || pendingPixelEraserPath_.isEmpty()) {
         return;
     }
 
@@ -513,12 +502,12 @@ void SkiaDrawingEngine::renderActivePixelEraserCutout(SkCanvas* canvas) {
         SkPaint clearPaint;
         clearPaint.setBlendMode(SkBlendMode::kClear);
         clearPaint.setAntiAlias(true);
-        canvas->drawPath(eraserPath, clearPaint);
+        canvas->drawPath(pendingPixelEraserPath_, clearPaint);
         return;
     }
 
     canvas->save();
-    canvas->clipPath(eraserPath, SkClipOp::kIntersect, true);
+    canvas->clipPath(pendingPixelEraserPath_, SkClipOp::kIntersect, true);
     if (backgroundType_ == "pdf" || backgroundType_ == "plain") {
         canvas->drawColor(SK_ColorWHITE);
     }

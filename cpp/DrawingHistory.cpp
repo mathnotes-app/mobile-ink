@@ -18,24 +18,6 @@ void commitStrokeDelta(
     }
 }
 
-void appendPixelEraseCircleToDelta(
-    std::vector<StrokeDelta::PixelEraseEntry>& pendingPixelEraseEntries,
-    size_t strokeIndex,
-    const EraserCircle& circle
-) {
-    for (auto& entry : pendingPixelEraseEntries) {
-        if (entry.strokeIndex == strokeIndex) {
-            entry.addedCircles.push_back(circle);
-            return;
-        }
-    }
-
-    StrokeDelta::PixelEraseEntry entry;
-    entry.strokeIndex = strokeIndex;
-    entry.addedCircles.push_back(circle);
-    pendingPixelEraseEntries.push_back(std::move(entry));
-}
-
 void applyStrokeDelta(
     const StrokeDelta& delta,
     std::vector<Stroke>& strokes,

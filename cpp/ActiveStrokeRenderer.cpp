@@ -3,44 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <include/core/SkImageInfo.h>
-#include <include/core/SkPath.h>
 
 namespace nativedrawing {
-
-namespace {
-
-void drawCenterlinePreview(
-    SkCanvas* canvas,
-    const std::vector<Point>& points,
-    const SkPaint& basePaint
-) {
-    if (!canvas || points.size() < 2) {
-        return;
-    }
-
-    SkPath path;
-    path.moveTo(points[0].x, points[0].y);
-    for (size_t i = 1; i < points.size(); ++i) {
-        path.lineTo(points[i].x, points[i].y);
-    }
-
-    float width = 0.0f;
-    for (const auto& point : points) {
-        width += point.calculatedWidth;
-    }
-    width /= static_cast<float>(points.size());
-
-    SkPaint paint = basePaint;
-    paint.setStyle(SkPaint::kStroke_Style);
-    paint.setStrokeWidth(width);
-    paint.setStrokeCap(SkPaint::kRound_Cap);
-    paint.setStrokeJoin(SkPaint::kRound_Join);
-    paint.setAntiAlias(true);
-    paint.setBlendMode(SkBlendMode::kSrcOver);
-    canvas->drawPath(path, paint);
-}
-
-}  // namespace
 
 ActiveStrokeRenderer::ActiveStrokeRenderer(int width, int height, PathRenderer* pathRenderer)
     : pathRenderer_(pathRenderer)
@@ -74,21 +38,65 @@ void ActiveStrokeRenderer::reset() {
     resetIncrementalState();
 }
 
-void ActiveStrokeRenderer::ensureSurfaceScale(float surfaceScale) {
-    const float nextScale = std::max(1.0f, std::min(5.0f, surfaceScale));
-    if (activeStrokeSurface_ && std::fabs(nextScale - surfaceScale_) < 0.01f) {
+void ActiveStrokeRenderer::ensureViewportAlignment(const ActiveStrokeViewport& viewport) {
+    const float requestedScale = std::max(1.0f, std::min(5.0f, viewport.scale));
+
+    // The surface is fixed at logical dimensions, so the covered region at
+    // `scale` magnification is logical/scale. Cap the scale at the highest
+    // magnification whose viewport still fits; inconsistent viewport data
+    // (e.g. a consumer that sets renderScale without viewport ratios)
+    // degrades to the identity mapping instead of an anchored surface that
+    // misses where the user is drawing.
+    const float viewWidth = viewport.width > 0.0f
+        ? viewport.width
+        : static_cast<float>(logicalWidth_);
+    const float viewHeight = viewport.height > 0.0f
+        ? viewport.height
+        : static_cast<float>(logicalHeight_);
+    const float fitScale = std::min(
+        static_cast<float>(logicalWidth_) / std::max(1.0f, viewWidth),
+        static_cast<float>(logicalHeight_) / std::max(1.0f, viewHeight)
+    );
+    const float nextScale = std::max(1.0f, std::min(requestedScale, fitScale));
+
+    float nextOriginX = 0.0f;
+    float nextOriginY = 0.0f;
+    if (nextScale > 1.01f) {
+        const float coveredWidth = static_cast<float>(logicalWidth_) / nextScale;
+        const float coveredHeight = static_cast<float>(logicalHeight_) / nextScale;
+        nextOriginX = std::max(0.0f, std::min(
+            viewport.left, static_cast<float>(logicalWidth_) - coveredWidth));
+        nextOriginY = std::max(0.0f, std::min(
+            viewport.top, static_cast<float>(logicalHeight_) - coveredHeight));
+    }
+
+    if (activeStrokeSurface_
+        && std::fabs(nextScale - viewportScale_) < 0.01f
+        && std::fabs(nextOriginX - viewportOriginX_) < 0.5f
+        && std::fabs(nextOriginY - viewportOriginY_) < 0.5f) {
         return;
     }
 
-    surfaceScale_ = nextScale;
-    const int scaledWidth = std::max(1, static_cast<int>(std::ceil(logicalWidth_ * surfaceScale_)));
-    const int scaledHeight = std::max(1, static_cast<int>(std::ceil(logicalHeight_ * surfaceScale_)));
-    SkImageInfo info = SkImageInfo::MakeN32Premul(scaledWidth, scaledHeight);
-    activeStrokeSurface_ = SkSurfaces::Raster(info);
+    viewportScale_ = nextScale;
+    viewportOriginX_ = nextOriginX;
+    viewportOriginY_ = nextOriginY;
+
+    if (!activeStrokeSurface_) {
+        SkImageInfo info = SkImageInfo::MakeN32Premul(logicalWidth_, logicalHeight_);
+        activeStrokeSurface_ = SkSurfaces::Raster(info);
+    }
     if (activeStrokeSurface_) {
         activeStrokeSurface_->getCanvas()->clear(SK_ColorTRANSPARENT);
     }
+    // Anchoring changed mid-stroke: drop incremental progress so the next
+    // renderIncremental call re-renders every point into the fresh surface.
     resetIncrementalState();
+}
+
+void ActiveStrokeRenderer::applySurfaceTransform(SkCanvas* surfaceCanvas) const {
+    surfaceCanvas->save();
+    surfaceCanvas->scale(viewportScale_, viewportScale_);
+    surfaceCanvas->translate(-viewportOriginX_, -viewportOriginY_);
 }
 
 void ActiveStrokeRenderer::renderIncremental(
@@ -96,12 +104,10 @@ void ActiveStrokeRenderer::renderIncremental(
     const std::vector<Point>& points,
     const SkPaint& paint,
     const std::string& toolType,
-    float surfaceScale
+    const ActiveStrokeViewport& viewport
 ) {
-    ensureSurfaceScale(surfaceScale);
+    ensureViewportAlignment(viewport);
     if (!activeStrokeSurface_ || points.size() < 2) return;
-
-    const bool isTranslucentCenterlineTool = toolType == "highlighter" || toolType == "marker";
 
     // Calligraphy: full redraw each frame for clean rendering
     // The incremental approach causes overlap artifacts on thin strokes
@@ -135,13 +141,8 @@ void ActiveStrokeRenderer::renderIncremental(
             bool isFirstSegment = !hasLastEdge_;
 
             IncrementalResult result;
-            surfaceCanvas->save();
-            surfaceCanvas->scale(surfaceScale_, surfaceScale_);
-            if (isTranslucentCenterlineTool) {
-                drawCenterlinePreview(surfaceCanvas, segment, paint);
-                result.lastLeftEdge = SkPoint::Make(segment.back().x, segment.back().y);
-                result.lastRightEdge = result.lastLeftEdge;
-            } else if (toolType == "crayon") {
+            applySurfaceTransform(surfaceCanvas);
+            if (toolType == "crayon") {
                 result = pathRenderer_->drawCrayonPathIncremental(
                     surfaceCanvas, segment, paint,
                     lastLeftEdge_, lastRightEdge_, isFirstSegment);
@@ -149,13 +150,6 @@ void ActiveStrokeRenderer::renderIncremental(
                 if (isFirstSegment) {
                     pathRenderer_->drawCrayonStartCap(surfaceCanvas, segment, paint);
                 }
-            } else if (toolType == "calligraphy") {
-                result = pathRenderer_->drawCalligraphyPathIncremental(
-                    surfaceCanvas, segment, paint,
-                    lastLeftEdge_, lastRightEdge_, isFirstSegment,
-                    lastHalfWidth_);
-                lastHalfWidth_ = result.lastHalfWidth;
-                // Calligraphy has tapered ends, no caps needed
             } else {
                 result = pathRenderer_->drawVariableWidthPathIncremental(
                     surfaceCanvas, segment, paint,
@@ -199,16 +193,10 @@ void ActiveStrokeRenderer::renderIncremental(
         }
 
         if (tail.size() >= 2) {
-            if (isTranslucentCenterlineTool) {
-                drawCenterlinePreview(canvas, tail, paint);
-            } else if (toolType == "crayon") {
+            if (toolType == "crayon") {
                 // drawCrayonPathTail already draws end cap
                 pathRenderer_->drawCrayonPathTail(canvas, tail, paint,
                     lastLeftEdge_, lastRightEdge_, hasLastEdge_);
-            } else if (toolType == "calligraphy") {
-                // Calligraphy has tapered ends, no caps needed
-                pathRenderer_->drawCalligraphyPathTail(canvas, tail, paint,
-                    lastLeftEdge_, lastRightEdge_, hasLastEdge_, lastHalfWidth_);
             } else {
                 pathRenderer_->drawVariableWidthPathTail(canvas, tail, paint,
                     lastLeftEdge_, lastRightEdge_, hasLastEdge_);
@@ -240,39 +228,27 @@ void ActiveStrokeRenderer::renderFinalTail(
 
     SkCanvas* surfaceCanvas = activeStrokeSurface_->getCanvas();
 
-    if (toolType == "highlighter" || toolType == "marker") {
-        surfaceCanvas->save();
-        surfaceCanvas->scale(surfaceScale_, surfaceScale_);
-        drawCenterlinePreview(surfaceCanvas, finalTail, paint);
-        surfaceCanvas->restore();
-    } else if (toolType == "crayon") {
-        surfaceCanvas->save();
-        surfaceCanvas->scale(surfaceScale_, surfaceScale_);
+    applySurfaceTransform(surfaceCanvas);
+    if (toolType == "crayon") {
         pathRenderer_->drawCrayonPathIncremental(
             surfaceCanvas, finalTail, paint,
             lastLeftEdge_, lastRightEdge_, !hasLastEdge_);
         // Only draw end cap - start cap was already drawn during incremental rendering
         pathRenderer_->drawCrayonEndCap(surfaceCanvas, points, paint);
-        surfaceCanvas->restore();
     } else if (toolType == "calligraphy") {
-        surfaceCanvas->save();
-        surfaceCanvas->scale(surfaceScale_, surfaceScale_);
         pathRenderer_->drawCalligraphyPathIncremental(
             surfaceCanvas, finalTail, paint,
             lastLeftEdge_, lastRightEdge_, !hasLastEdge_,
             lastHalfWidth_);
         // Calligraphy has tapered ends, no caps needed
-        surfaceCanvas->restore();
     } else {
-        surfaceCanvas->save();
-        surfaceCanvas->scale(surfaceScale_, surfaceScale_);
         pathRenderer_->drawVariableWidthPathIncremental(
             surfaceCanvas, finalTail, paint,
             lastLeftEdge_, lastRightEdge_, !hasLastEdge_);
         // Only draw end cap - start cap was already drawn during incremental rendering
         pathRenderer_->drawVariableWidthEndCap(surfaceCanvas, points, paint);
-        surfaceCanvas->restore();
     }
+    surfaceCanvas->restore();
 
     cachedActiveSnapshot_ = activeStrokeSurface_->makeImageSnapshot();
 }
@@ -282,16 +258,22 @@ void ActiveStrokeRenderer::drawSnapshot(SkCanvas* canvas) const {
         return;
     }
 
-    if (std::fabs(surfaceScale_ - 1.0f) < 0.01f) {
+    if (viewportScale_ <= 1.01f) {
         canvas->drawImage(cachedActiveSnapshot_, 0, 0);
         return;
     }
 
-    const SkRect dst = SkRect::MakeWH(
-        static_cast<float>(logicalWidth_),
-        static_cast<float>(logicalHeight_)
+    const SkRect dst = SkRect::MakeXYWH(
+        viewportOriginX_,
+        viewportOriginY_,
+        static_cast<float>(logicalWidth_) / viewportScale_,
+        static_cast<float>(logicalHeight_) / viewportScale_
     );
-    canvas->drawImageRect(cachedActiveSnapshot_, dst, SkSamplingOptions());
+    canvas->drawImageRect(
+        cachedActiveSnapshot_,
+        dst,
+        SkSamplingOptions(SkFilterMode::kLinear)
+    );
 }
 
 } // namespace nativedrawing

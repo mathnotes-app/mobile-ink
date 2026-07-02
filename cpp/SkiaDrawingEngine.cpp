@@ -118,10 +118,6 @@ void SkiaDrawingEngine::commitDelta(StrokeDelta&& delta) {
     commitStrokeDelta(undoStack_, redoStack_, std::move(delta), MAX_HISTORY_ENTRIES);
 }
 
-void SkiaDrawingEngine::recordPixelEraseCircleAdded(size_t strokeIndex, const EraserCircle& circle) {
-    appendPixelEraseCircleToDelta(pendingPixelEraseEntries_, strokeIndex, circle);
-}
-
 void SkiaDrawingEngine::applyDelta(const StrokeDelta& delta) {
     applyStrokeDelta(delta, strokes_, eraserCircles_, *pathRenderer_);
 }
@@ -146,6 +142,7 @@ void SkiaDrawingEngine::touchBegan(
     predictedPointCount_ = 0;  // Reset prediction tracking for new stroke
     pendingPixelEraseEntries_.clear();
     pendingPixelEraserCircles_.clear();
+    pendingPixelEraserPath_.reset();
     clearActiveShapePreview();
 
     // Reset incremental active stroke state
@@ -344,10 +341,10 @@ void SkiaDrawingEngine::touchEnded(long timestamp) {
             delta.pixelEraseEntries = std::move(pendingPixelEraseEntries_);
             commitDelta(std::move(delta));
             cachedStrokeSnapshot_ = nullptr;
-            invalidateAllStrokeTiles();
         }
         pendingPixelEraseEntries_.clear();
         pendingPixelEraserCircles_.clear();
+        pendingPixelEraserPath_.reset();
 
         // DON'T set needsStrokeRedraw_ - kClear visual is already correct
         // Full redraw only needed on undo/redo/deserialize
@@ -627,7 +624,7 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
                 strokePaint.setAlpha(static_cast<uint8_t>(baseAlpha * stroke.originalAlphaMod));
             }
             renderStrokeGeometry(strokeCanvas, stroke, strokePaint);
-        } else {
+        } else if (activeStrokeRenderer_->viewportScale() <= 1.01f) {
             // Render any remaining tail points to complete the stroke
             if (currentPoints_.size() > activeStrokeRenderer_->getLastRenderedIndex()) {
                 activeStrokeRenderer_->renderFinalTail(currentPoints_, currentPaint_, currentTool_);
@@ -635,6 +632,14 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
 
             // Composite active stroke onto persistent stroke surface
             activeStrokeRenderer_->drawSnapshot(strokeCanvas);
+        } else {
+            // Zoomed: the active surface covers only the magnified viewport,
+            // so re-render the finished stroke from vector data at 1x rather
+            // than downsampling the preview pixels.
+            SkPaint strokePaint = stroke.paint;
+            strokePaint.setAlpha(
+                static_cast<uint8_t>(stroke.paint.getAlpha() * stroke.originalAlphaMod));
+            renderStrokeGeometry(strokeCanvas, stroke, strokePaint);
         }
 
         // Update cached snapshot

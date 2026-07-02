@@ -138,14 +138,16 @@ private:
     void revertDelta(const StrokeDelta& delta);  // backward (used by undo)
 
     // Pixel-eraser accumulator. During an eraser drag (touchBegan eraser
-    // -> touchMoved... -> touchEnded), each applyPixelEraserAt call
-    // appends circles to multiple strokes' erasedBy vectors. We
-    // accumulate the (strokeIndex, circles) pairs here so touchEnded can
-    // emit one PixelErase delta covering the whole drag. Reset at the
-    // start of each eraser touch.
+    // -> touchMoved... -> touchEnded), applyPixelEraserAt only collects
+    // circles (and mirrors them into pendingPixelEraserPath_ for the
+    // zoomed cutout overlay). touchEnded calls
+    // applyPendingPixelEraseToStrokes, which assigns the circles to the
+    // strokes they intersect, fills pendingPixelEraseEntries_, and emits
+    // one PixelErase delta covering the whole drag. Reset at the start of
+    // each eraser touch.
     std::vector<StrokeDelta::PixelEraseEntry> pendingPixelEraseEntries_;
     std::vector<EraserCircle> pendingPixelEraserCircles_;
-    void recordPixelEraseCircleAdded(size_t strokeIndex, const EraserCircle& circle);
+    SkPath pendingPixelEraserPath_;
     bool applyPendingPixelEraseToStrokes();
 
     int width_;
@@ -310,7 +312,6 @@ private:
     bool updateActiveShapePreviewForPoint(float x, float y);
     void redrawStrokes();
     void markStrokeCachesDirty();
-    void invalidateAllStrokeTiles();
     void invalidateStrokeTilesForRect(const SkRect& bounds);
     void renderScaleAwareStrokes(SkCanvas* canvas);
     void renderActiveContent(SkCanvas* canvas, bool useIncrementalActiveSurface);

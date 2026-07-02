@@ -137,6 +137,11 @@ bool SkiaDrawingEngine::applyPixelEraserAt(float eraserX, float eraserY, float r
         circlesToAdd.begin(),
         circlesToAdd.end()
     );
+    // Mirror the circles into a cached path so the zoomed cutout overlay
+    // doesn't rebuild an ever-growing path on every frame of the drag.
+    for (const auto& circle : circlesToAdd) {
+        pendingPixelEraserPath_.addCircle(circle.x, circle.y, circle.radius);
+    }
 
     // Apply kClear directly to strokeSurface_ for instant feedback. Stroke
     // metadata is updated once at touch end so the drag loop stays cheap.
@@ -226,12 +231,41 @@ bool SkiaDrawingEngine::applyPendingPixelEraseToStrokes() {
             circlesForStroke.end()
         );
 
+        // Refresh the visibility cache once per gesture so fully-erased
+        // strokes stop responding to selection.
+        if (stroke.cachedHasVisiblePoints) {
+            bool hasVisible = false;
+            for (const auto& pt : stroke.points) {
+                bool pointVisible = true;
+                for (const auto& circle : stroke.erasedBy) {
+                    float dx = pt.x - circle.x;
+                    float dy = pt.y - circle.y;
+                    float totalRadius = circle.radius + pt.calculatedWidth / 2.0f;
+                    if (dx * dx + dy * dy <= totalRadius * totalRadius) {
+                        pointVisible = false;
+                        break;
+                    }
+                }
+                if (pointVisible) {
+                    hasVisible = true;
+                    break;
+                }
+            }
+            stroke.cachedHasVisiblePoints = hasVisible;
+        }
+
         StrokeDelta::PixelEraseEntry entry;
         entry.strokeIndex = strokeIndex;
         entry.addedCircles = std::move(circlesForStroke);
         pendingPixelEraseEntries_.push_back(std::move(entry));
 
         anyModified = true;
+    }
+
+    if (anyModified) {
+        SkRect invalidateBounds = eraseBounds;
+        invalidateBounds.outset(8.0f, 8.0f);
+        invalidateStrokeTilesForRect(invalidateBounds);
     }
 
     return anyModified;
