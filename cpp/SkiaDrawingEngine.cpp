@@ -118,10 +118,6 @@ void SkiaDrawingEngine::commitDelta(StrokeDelta&& delta) {
     commitStrokeDelta(undoStack_, redoStack_, std::move(delta), MAX_HISTORY_ENTRIES);
 }
 
-void SkiaDrawingEngine::recordPixelEraseCircleAdded(size_t strokeIndex, const EraserCircle& circle) {
-    appendPixelEraseCircleToDelta(pendingPixelEraseEntries_, strokeIndex, circle);
-}
-
 void SkiaDrawingEngine::applyDelta(const StrokeDelta& delta) {
     applyStrokeDelta(delta, strokes_, eraserCircles_, *pathRenderer_);
 }
@@ -144,6 +140,7 @@ void SkiaDrawingEngine::touchBegan(
     currentPoints_.clear();
     currentPath_.reset();
     predictedPointCount_ = 0;  // Reset prediction tracking for new stroke
+    resetPendingPixelErase();
     clearActiveShapePreview();
 
     // Reset incremental active stroke state
@@ -335,17 +332,13 @@ void SkiaDrawingEngine::touchEnded(long timestamp) {
     if (currentTool_ == "eraser" && eraserMode_ == "object") {
         eraseObjects();
     } else if (currentTool_ == "eraser" && eraserMode_ == "pixel") {
-        // Commit a single PixelErase delta covering every (stroke, circle)
-        // pair that was added during this drag. pendingPixelEraseEntries_
-        // was populated incrementally by recordPixelEraseCircleAdded
-        // during applyPixelEraserAt calls. Reset for the next drag.
-        if (!pendingPixelEraseEntries_.empty()) {
+        if (applyPendingPixelEraseToStrokes()) {
             StrokeDelta delta;
             delta.kind = StrokeDelta::Kind::PixelErase;
             delta.pixelEraseEntries = std::move(pendingPixelEraseEntries_);
             commitDelta(std::move(delta));
         }
-        pendingPixelEraseEntries_.clear();
+        resetPendingPixelErase();
 
         // DON'T set needsStrokeRedraw_ - kClear visual is already correct
         // Full redraw only needed on undo/redo/deserialize
@@ -616,12 +609,19 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
     if (strokeSurface_ && currentTool_ != "eraser") {
         SkCanvas* strokeCanvas = strokeSurface_->getCanvas();
 
-        if (isRecognizedShapeToolType(stroke.toolType)) {
+        // Recognized shapes and centerline tools always re-render from vector
+        // data. Other tools do too when zoomed: the active surface covers only
+        // the magnified viewport, so re-rendering at 1x beats downsampling the
+        // preview pixels. At 1x the accumulated preview surface is composited
+        // directly, which is O(1) in stroke length.
+        const bool renderFromGeometry = isRecognizedShapeToolType(stroke.toolType)
+            || isCenterlineStrokedToolType(stroke.toolType)
+            || activeStrokeRenderer_->viewportScale() > kIdentityRenderScaleThreshold;
+
+        if (renderFromGeometry) {
             SkPaint strokePaint = stroke.paint;
-            if (!stroke.isEraser) {
-                uint8_t baseAlpha = stroke.paint.getAlpha();
-                strokePaint.setAlpha(static_cast<uint8_t>(baseAlpha * stroke.originalAlphaMod));
-            }
+            strokePaint.setAlpha(
+                static_cast<uint8_t>(stroke.paint.getAlpha() * stroke.originalAlphaMod));
             renderStrokeGeometry(strokeCanvas, stroke, strokePaint);
         } else {
             // Render any remaining tail points to complete the stroke
@@ -630,10 +630,7 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
             }
 
             // Composite active stroke onto persistent stroke surface
-            sk_sp<SkImage> activeImage = activeStrokeRenderer_->getSnapshot();
-            if (activeImage) {
-                strokeCanvas->drawImage(activeImage, 0, 0);
-            }
+            activeStrokeRenderer_->drawSnapshot(strokeCanvas);
         }
 
         // Update cached snapshot

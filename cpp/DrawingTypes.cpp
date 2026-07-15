@@ -6,6 +6,29 @@
 
 namespace nativedrawing {
 
+bool Stroke::hasVisiblePoints() const {
+    if (erasedBy.empty()) {
+        return true;
+    }
+
+    for (const auto& pt : points) {
+        bool pointVisible = true;
+        for (const auto& circle : erasedBy) {
+            float dx = pt.x - circle.x;
+            float dy = pt.y - circle.y;
+            float totalRadius = circle.radius + pt.calculatedWidth / 2.0f;
+            if (dx * dx + dy * dy <= totalRadius * totalRadius) {
+                pointVisible = false;
+                break;
+            }
+        }
+        if (pointVisible) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void Stroke::ensureEraserCacheValid() const {
     if (erasedBy.size() == cachedEraserCount) {
         return;

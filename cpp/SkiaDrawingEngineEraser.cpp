@@ -106,11 +106,13 @@ void SkiaDrawingEngine::bakeEraserCircles() {
     printf("[C++] bakeEraserCircles: Baked %zu circles total\n", bakedCircleCount_);
 }
 
-bool SkiaDrawingEngine::applyPixelEraserAt(float eraserX, float eraserY, float radius) {
-    // Pixel-perfect eraser: store eraser circles WITH strokes for render-time clipping
-    // No splitting - curves stay intact, eraser data moves with stroke
-    bool anyModified = false;
+void SkiaDrawingEngine::resetPendingPixelErase() {
+    pendingPixelEraseEntries_.clear();
+    pendingPixelEraserCircles_.clear();
+    pendingPixelEraserPath_.reset();
+}
 
+void SkiaDrawingEngine::applyPixelEraserAt(float eraserX, float eraserY, float radius) {
     // Build list of circles to add (may include interpolated circles for full coverage)
     std::vector<EraserCircle> circlesToAdd;
     circlesToAdd.push_back({eraserX, eraserY, radius});
@@ -135,112 +137,43 @@ bool SkiaDrawingEngine::applyPixelEraserAt(float eraserX, float eraserY, float r
         }
     }
 
-    for (size_t strokeIndex = 0; strokeIndex < strokes_.size(); ++strokeIndex) {
-        auto& stroke = strokes_[strokeIndex];
-        if (stroke.isEraser) continue;
-        if (stroke.points.size() < 2) continue;
-
-        // Check if eraser path intersects stroke bounds (expand for full path)
-        SkRect bounds = stroke.path.getBounds();
-        bounds.outset(radius, radius);
-
-        bool affectsStroke = false;
-        for (const auto& circle : circlesToAdd) {
-            if (bounds.contains(circle.x, circle.y)) {
-                affectsStroke = true;
-                break;
-            }
-        }
-        if (!affectsStroke) continue;
-
-        // Store all eraser circles with this stroke for full coverage.
-        // Each circle is also recorded into pendingPixelEraseEntries_ so
-        // touchEnded can emit a single PixelErase delta covering the
-        // whole drag. Without this the per-stroke erasedBy mutations
-        // would have no record in history -- pixel erase wouldn't undo.
-        for (const auto& circle : circlesToAdd) {
-            stroke.erasedBy.push_back(circle);
-            recordPixelEraseCircleAdded(strokeIndex, circle);
-        }
-
-        // OPTIMIZATION: Only update visibility if stroke was previously visible
-        // Skip strokes already marked invisible - they stay invisible
-        if (stroke.cachedHasVisiblePoints) {
-            // Quick check: do new circles potentially cover remaining visible points?
-            // Only do full check every 50 circles to avoid O(n^2) during heavy erasing
-            size_t circleCount = stroke.erasedBy.size();
-            if (circleCount % 50 == 0 || circlesToAdd.size() > 10) {
-                bool hasVisible = false;
-                for (const auto& pt : stroke.points) {
-                    bool pointVisible = true;
-                    for (const auto& circle : stroke.erasedBy) {
-                        float dx = pt.x - circle.x;
-                        float dy = pt.y - circle.y;
-                        float totalRadius = circle.radius + pt.calculatedWidth / 2.0f;
-                        if (dx * dx + dy * dy <= totalRadius * totalRadius) {
-                            pointVisible = false;
-                            break;
-                        }
-                    }
-                    if (pointVisible) {
-                        hasVisible = true;
-                        break;
-                    }
-                }
-                stroke.cachedHasVisiblePoints = hasVisible;
-            }
-        }
-
-        anyModified = true;
+    pendingPixelEraserCircles_.insert(
+        pendingPixelEraserCircles_.end(),
+        circlesToAdd.begin(),
+        circlesToAdd.end()
+    );
+    // Mirror the circles into a cached path so the zoomed cutout overlay
+    // doesn't rebuild an ever-growing path on every frame of the drag.
+    for (const auto& circle : circlesToAdd) {
+        pendingPixelEraserPath_.addCircle(circle.x, circle.y, circle.radius);
     }
 
-    if (anyModified) {
-        SkRect erasedBounds = SkRect::MakeLTRB(
-            eraserX - radius,
-            eraserY - radius,
-            eraserX + radius,
-            eraserY + radius
-        );
+    // Apply kClear directly to strokeSurface_ for instant feedback. Stroke
+    // metadata is updated once at touch end so the drag loop stays cheap.
+    if (strokeSurface_) {
+        SkCanvas* canvas = strokeSurface_->getCanvas();
+        SkPaint clearPaint;
+        clearPaint.setBlendMode(SkBlendMode::kClear);
+        clearPaint.setAntiAlias(true);
+
         if (hasLastEraserPoint_) {
-            erasedBounds.join(SkRect::MakeLTRB(
-                lastEraserX_ - lastEraserRadius_,
-                lastEraserY_ - lastEraserRadius_,
-                lastEraserX_ + lastEraserRadius_,
-                lastEraserY_ + lastEraserRadius_
-            ));
+            SkPath eraserPath;
+            eraserPath.moveTo(lastEraserX_, lastEraserY_);
+            eraserPath.lineTo(eraserX, eraserY);
+
+            clearPaint.setStyle(SkPaint::kStroke_Style);
+            clearPaint.setStrokeWidth(radius * 2.0f);
+            clearPaint.setStrokeCap(SkPaint::kRound_Cap);
+            clearPaint.setStrokeJoin(SkPaint::kRound_Join);
+            canvas->drawPath(eraserPath, clearPaint);
+        } else {
+            canvas->drawCircle(eraserX, eraserY, radius, clearPaint);
         }
-        erasedBounds.outset(radius * 2.0f, radius * 2.0f);
-        invalidateStrokeTilesForRect(erasedBounds);
 
-        // OPTIMIZATION: Apply kClear directly to stroke surface for instant feedback
-        // This avoids full redraw during active erasing - much faster
-        if (strokeSurface_) {
-            SkCanvas* canvas = strokeSurface_->getCanvas();
-            SkPaint clearPaint;
-            clearPaint.setBlendMode(SkBlendMode::kClear);
-            clearPaint.setAntiAlias(true);
-
-            // Draw stroked path from last position to current for full coverage
-            // Individual circles leave gaps when moving quickly
-            if (hasLastEraserPoint_) {
-                // Draw a stroked line from last position to current
-                SkPath eraserPath;
-                eraserPath.moveTo(lastEraserX_, lastEraserY_);
-                eraserPath.lineTo(eraserX, eraserY);
-
-                clearPaint.setStyle(SkPaint::kStroke_Style);
-                clearPaint.setStrokeWidth(radius * 2.0f);  // Diameter
-                clearPaint.setStrokeCap(SkPaint::kRound_Cap);
-                clearPaint.setStrokeJoin(SkPaint::kRound_Join);
-                canvas->drawPath(eraserPath, clearPaint);
-            } else {
-                // First point - just draw circle
-                canvas->drawCircle(eraserX, eraserY, radius, clearPaint);
-            }
-
-            cachedStrokeSnapshot_ = strokeSurface_->makeImageSnapshot();
-        }
-        // DON'T set needsStrokeRedraw_ = true - defer full redraw to touchEnded
+        // Keep the live surface hot during the drag. Snapshotting here forces
+        // full-surface work per input sample; the snapshot is invalidated so
+        // render() falls back to drawing the surface directly.
+        cachedStrokeSnapshot_ = nullptr;
     }
 
     // Track position for next call
@@ -248,6 +181,80 @@ bool SkiaDrawingEngine::applyPixelEraserAt(float eraserX, float eraserY, float r
     lastEraserY_ = eraserY;
     lastEraserRadius_ = radius;
     hasLastEraserPoint_ = true;
+}
+
+bool SkiaDrawingEngine::applyPendingPixelEraseToStrokes() {
+    if (pendingPixelEraserCircles_.empty()) {
+        return false;
+    }
+
+    // The pending path is exactly the pending circles, so its bounds are the
+    // union of their bounds.
+    const SkRect eraseBounds = pendingPixelEraserPath_.getBounds();
+
+    std::vector<SkRect> circleBounds;
+    circleBounds.reserve(pendingPixelEraserCircles_.size());
+    for (const auto& circle : pendingPixelEraserCircles_) {
+        circleBounds.push_back(SkRect::MakeLTRB(
+            circle.x - circle.radius,
+            circle.y - circle.radius,
+            circle.x + circle.radius,
+            circle.y + circle.radius
+        ));
+    }
+
+    bool anyModified = false;
+
+    for (size_t strokeIndex = 0; strokeIndex < strokes_.size(); ++strokeIndex) {
+        auto& stroke = strokes_[strokeIndex];
+        if (stroke.isEraser || stroke.points.size() < 2) {
+            continue;
+        }
+
+        SkRect bounds = stroke.path.getBounds();
+        // Conservative O(1) outset covering the rendered stroke width;
+        // per-circle bounds below already include the eraser radius.
+        const float strokeOutset = std::max(8.0f, stroke.paint.getStrokeWidth() * 2.0f);
+        bounds.outset(strokeOutset, strokeOutset);
+        if (!bounds.intersects(eraseBounds)) {
+            continue;
+        }
+
+        std::vector<EraserCircle> circlesForStroke;
+        for (size_t i = 0; i < pendingPixelEraserCircles_.size(); ++i) {
+            if (bounds.intersects(circleBounds[i])) {
+                circlesForStroke.push_back(pendingPixelEraserCircles_[i]);
+            }
+        }
+        if (circlesForStroke.empty()) {
+            continue;
+        }
+
+        stroke.erasedBy.insert(
+            stroke.erasedBy.end(),
+            circlesForStroke.begin(),
+            circlesForStroke.end()
+        );
+
+        // Refresh the visibility cache once per gesture so fully-erased
+        // strokes stop responding to selection.
+        if (stroke.cachedHasVisiblePoints) {
+            stroke.cachedHasVisiblePoints = stroke.hasVisiblePoints();
+        }
+
+        StrokeDelta::PixelEraseEntry entry;
+        entry.strokeIndex = strokeIndex;
+        entry.addedCircles = std::move(circlesForStroke);
+        pendingPixelEraseEntries_.push_back(std::move(entry));
+
+        anyModified = true;
+    }
+
+    if (anyModified) {
+        SkRect invalidateBounds = eraseBounds;
+        invalidateBounds.outset(8.0f, 8.0f);
+        invalidateStrokeTilesForRect(invalidateBounds);
+    }
 
     return anyModified;
 }

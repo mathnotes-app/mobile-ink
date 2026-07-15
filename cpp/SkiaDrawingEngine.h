@@ -138,13 +138,17 @@ private:
     void revertDelta(const StrokeDelta& delta);  // backward (used by undo)
 
     // Pixel-eraser accumulator. During an eraser drag (touchBegan eraser
-    // -> touchMoved... -> touchEnded), each applyPixelEraserAt call
-    // appends circles to multiple strokes' erasedBy vectors. We
-    // accumulate the (strokeIndex, circles) pairs here so touchEnded can
-    // emit one PixelErase delta covering the whole drag. Reset at the
-    // start of each eraser touch.
+    // -> touchMoved... -> touchEnded), applyPixelEraserAt only collects
+    // circles (and mirrors them into pendingPixelEraserPath_ for the
+    // zoomed cutout overlay). touchEnded calls
+    // applyPendingPixelEraseToStrokes, which assigns the circles to the
+    // strokes they intersect, fills pendingPixelEraseEntries_, and emits
+    // one PixelErase delta covering the whole drag. Reset at the start of
+    // each eraser touch.
     std::vector<StrokeDelta::PixelEraseEntry> pendingPixelEraseEntries_;
-    void recordPixelEraseCircleAdded(size_t strokeIndex, const EraserCircle& circle);
+    std::vector<EraserCircle> pendingPixelEraserCircles_;
+    SkPath pendingPixelEraserPath_;
+    bool applyPendingPixelEraseToStrokes();
 
     int width_;
     int height_;
@@ -310,7 +314,15 @@ private:
     void markStrokeCachesDirty();
     void invalidateStrokeTilesForRect(const SkRect& bounds);
     void renderScaleAwareStrokes(SkCanvas* canvas);
-    void renderActiveContent(SkCanvas* canvas, bool useIncrementalActiveSurface);
+    void renderActiveContent(SkCanvas* canvas);
+    // Draw points as a single constant-width stroked centerline (highlighter/
+    // marker). Uses cachedPath when non-empty, else smooths from points.
+    void drawCenterlineStrokePath(
+        SkCanvas* canvas,
+        const std::vector<Point>& points,
+        const SkPath& cachedPath,
+        const SkPaint& paint
+    );
     sk_sp<SkImage> renderStrokeTile(const StrokeTileKey& key, int tileWidth, int tileHeight, float scale);
     void pruneStrokeTileCache();
     void redrawEraserMask();  // Dual-surface: only redraws eraser circles to mask
@@ -324,7 +336,8 @@ private:
 
     // PencilKit-style pixel eraser: immediately splits strokes at eraser point
     // Returns true if any strokes were modified
-    bool applyPixelEraserAt(float x, float y, float radius);
+    void applyPixelEraserAt(float x, float y, float radius);
+    void resetPendingPixelErase();
 
     mutable std::recursive_mutex stateMutex_;
 };

@@ -21,8 +21,6 @@ namespace {
 
 constexpr int kStrokeTileSize = 512;
 constexpr size_t kMaxStrokeTileCacheBytes = 96 * 1024 * 1024;
-constexpr float kMinimumRenderScale = 1.0f;
-constexpr float kMaximumRenderScale = 5.0f;
 
 SkColor swapRedBlueChannels(SkColor color) {
     return SkColorSetARGB(
@@ -169,6 +167,11 @@ void SkiaDrawingEngine::renderStrokeGeometry(SkCanvas* canvas, const Stroke& str
             ? SkPaint::kRound_Cap
             : SkPaint::kButt_Cap);
         canvas->drawPath(shapePath, shapePaint);
+        return;
+    }
+
+    if (isCenterlineStrokedToolType(stroke.toolType)) {
+        drawCenterlineStrokePath(canvas, stroke.points, stroke.path, paint);
         return;
     }
 
@@ -423,7 +426,29 @@ void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
     }
 }
 
-void SkiaDrawingEngine::renderActiveContent(SkCanvas* canvas, bool useIncrementalActiveSurface) {
+void SkiaDrawingEngine::drawCenterlineStrokePath(
+    SkCanvas* canvas,
+    const std::vector<Point>& points,
+    const SkPath& cachedPath,
+    const SkPaint& paint
+) {
+    SkPath centerPath = cachedPath;
+    if (centerPath.isEmpty()) {
+        smoothPath(points, centerPath);
+    }
+    if (centerPath.isEmpty()) {
+        return;
+    }
+
+    SkPaint strokePaint = paint;
+    strokePaint.setStyle(SkPaint::kStroke_Style);
+    strokePaint.setStrokeWidth(averageCalculatedWidth(points));
+    strokePaint.setStrokeCap(SkPaint::kRound_Cap);
+    strokePaint.setStrokeJoin(SkPaint::kRound_Join);
+    canvas->drawPath(centerPath, strokePaint);
+}
+
+void SkiaDrawingEngine::renderActiveContent(SkCanvas* canvas) {
     if (hasActiveShapePreview_ && !activeShapePreviewPoints_.empty()) {
         Stroke previewStroke;
         previewStroke.points = activeShapePreviewPoints_;
@@ -432,21 +457,37 @@ void SkiaDrawingEngine::renderActiveContent(SkCanvas* canvas, bool useIncrementa
         previewStroke.toolType = activeShapePreviewToolType_;
 
         SkPaint previewPaint = currentPaint_;
-        if (currentTool_ != "highlighter" && currentTool_ != "marker") {
+        if (!isCenterlineStrokedToolType(currentTool_)) {
             const float pressureAlphaMod = 0.85f + (averagePressure(currentPoints_) * 0.15f);
             previewPaint.setAlpha(static_cast<uint8_t>(previewPaint.getAlpha() * pressureAlphaMod));
         }
 
         renderStrokeGeometry(canvas, previewStroke, previewPaint);
     } else if (currentPoints_.size() >= 2 && currentTool_ != "select" && currentTool_ != "eraser") {
-        if (useIncrementalActiveSurface) {
-            activeStrokeRenderer_->renderIncremental(canvas, currentPoints_, currentPaint_, currentTool_);
+        if (isCenterlineStrokedToolType(currentTool_)) {
+            // Full redraw each frame. Multiply blend is neutralized for the
+            // preview: the stroke is drawn over the composited canvas here,
+            // whereas the finished stroke multiplies only against other
+            // strokes on the transparent stroke layer.
+            SkPaint previewPaint = currentPaint_;
+            if (previewPaint.asBlendMode() == SkBlendMode::kMultiply) {
+                previewPaint.setBlendMode(SkBlendMode::kSrcOver);
+            }
+            drawCenterlineStrokePath(canvas, currentPoints_, SkPath(), previewPaint);
         } else {
-            Stroke activeStroke;
-            activeStroke.points = currentPoints_;
-            activeStroke.paint = currentPaint_;
-            activeStroke.toolType = currentTool_;
-            renderStrokeGeometry(canvas, activeStroke, currentPaint_);
+            ActiveStrokeViewport viewport;
+            viewport.scale = renderScale_;
+            viewport.left = visibleLeft_;
+            viewport.top = visibleTop_;
+            viewport.width = visibleWidth_;
+            viewport.height = visibleHeight_;
+            activeStrokeRenderer_->renderIncremental(
+                canvas,
+                currentPoints_,
+                currentPaint_,
+                currentTool_,
+                viewport
+            );
         }
     }
 }
@@ -481,7 +522,7 @@ void SkiaDrawingEngine::redrawEraserMask() {
 void SkiaDrawingEngine::render(SkCanvas* canvas) {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
 
-    const bool useScaleAwarePath = renderScale_ > 1.01f;
+    const bool useScaleAwarePath = renderScale_ > kIdentityRenderScaleThreshold;
 
     if (useScaleAwarePath) {
         if (backgroundType_ == "pdf") {
@@ -508,11 +549,26 @@ void SkiaDrawingEngine::render(SkCanvas* canvas) {
         }
         canvas->restore();
 
+        // During a pixel-erase drag the stroke tiles are stale (metadata is
+        // committed at pen-up), so clip the erased circles out of the stroke
+        // layer; the background drawn above shows through, whatever its type.
+        const bool livePixelErase = currentTool_ == "eraser"
+            && eraserMode_ == "pixel"
+            && !pendingPixelEraserPath_.isEmpty();
+        if (livePixelErase) {
+            SkPath deviceEraserPath = pendingPixelEraserPath_;
+            deviceEraserPath.transform(SkMatrix::Scale(renderScale_, renderScale_));
+            canvas->save();
+            canvas->clipPath(deviceEraserPath, SkClipOp::kDifference, true);
+        }
         renderScaleAwareStrokes(canvas);
+        if (livePixelErase) {
+            canvas->restore();
+        }
 
         canvas->save();
         canvas->scale(renderScale_, renderScale_);
-        renderActiveContent(canvas, false);
+        renderActiveContent(canvas);
 
         if (showEraserCursor_ && eraserCursorRadius_ > 0) {
             SkPaint cursorPaint;
@@ -653,12 +709,14 @@ void SkiaDrawingEngine::render(SkCanvas* canvas) {
                 }
             } else if (cachedStrokeSnapshot_) {
                 canvas->drawImage(cachedStrokeSnapshot_, 0, 0);
+            } else if (strokeSurface_) {
+                strokeSurface_->draw(canvas, 0, 0);
             }
         }
     }
 
     // 4. Draw active stroke incrementally (O(1) per frame instead of O(n))
-    renderActiveContent(canvas, true);
+    renderActiveContent(canvas);
 
     // Draw eraser cursor for pixel eraser
     if (showEraserCursor_ && eraserCursorRadius_ > 0) {

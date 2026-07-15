@@ -14,12 +14,6 @@ void commitStrokeDelta(
     size_t maxHistoryEntries
 );
 
-void appendPixelEraseCircleToDelta(
-    std::vector<StrokeDelta::PixelEraseEntry>& pendingPixelEraseEntries,
-    size_t strokeIndex,
-    const EraserCircle& circle
-);
-
 void applyStrokeDelta(
     const StrokeDelta& delta,
     std::vector<Stroke>& strokes,
