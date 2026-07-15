@@ -2,6 +2,13 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [0.3.2] - 2026-07-15
+
+- Smoothed zoomed drawing and erasing: highlighter and marker render as a single constant-width stroked centerline (no more segment seams at high zoom), the pixel eraser defers stroke bookkeeping to pen-up, and the zoomed stroke preview anchors a constant-memory surface to the viewport instead of allocating canvas-times-zoom pixels.
+- Exposed `transformNotificationMinIntervalMs` on `InfiniteInkCanvas` so apps can tune how often JS receives viewport transform notifications (default 16ms).
+- Documented continuous canvas positioning.
+- Fixed the podspec source tag to match the repository's v-prefixed release tags.
+
 ## [0.3.1] - 2026-05-20
 
 - Added crisp settled zoom rendering with scale-aware native drawables and cached stroke tiles.
