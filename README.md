@@ -32,6 +32,8 @@ The goal is simple: make this the best community drawing engine for React Native
 
 mobile-ink is currently used in production in MathNotes: https://apps.apple.com/us/app/mathnotes-ai-notes-for-stem/id6751956086
 
+[Four Engines in Nine Months](https://medium.com/@markmiller0470/four-engines-in-nine-months-what-it-actually-takes-to-build-a-performant-notebook-app-8cc3f6cf9bfc) is the engineering story behind this engine: the three drawing stacks that failed before this one, and what it cost to make ink, memory, zoom, and long notebooks work together.
+
 ## Why Not Just Use Skia, PencilKit, Or A Web Canvas?
 
 Most drawing tools give you a place to capture or render ink. They do not give you the continuous notebook surface that makes a real notes app hard: page pooling, long-document scrolling, zoom, selection, serialization, previews, native memory pressure handling, and cross-platform behavior.
@@ -180,6 +182,7 @@ The Android example runs the drawing canvas path. The benchmark screen and CPU/G
 - [Architecture](docs/architecture.md)
 - [API Reference](docs/api.md)
 - [Changelog](CHANGELOG.md)
+- [Four Engines in Nine Months](https://medium.com/@markmiller0470/four-engines-in-nine-months-what-it-actually-takes-to-build-a-performant-notebook-app-8cc3f6cf9bfc) - engineering write-up on stroke geometry, native memory, zoom, and page pooling
 
 ## Roadmap
 
