@@ -699,6 +699,13 @@ void SkiaDrawingEngine::clear() {
 
     commitDelta(std::move(delta));
 
+    // Reset the transient eraser cursor so a pooled engine reused for a new
+    // page doesn't render a stale cursor circle at the old coordinates.
+    showEraserCursor_ = false;
+    eraserCursorRadius_ = 0.0f;
+    eraserCursorX_ = 0.0f;
+    eraserCursorY_ = 0.0f;
+
     markStrokeCachesDirty();
     needsEraserMaskRedraw_ = true;
 }

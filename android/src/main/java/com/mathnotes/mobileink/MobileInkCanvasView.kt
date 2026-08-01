@@ -1105,6 +1105,11 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
                     clearSelection(drawingEngine)
                     post { emitSelectionChange() }
                 }
+                // Hide the C++-rendered eraser cursor when leaving the pixel
+                // eraser; the local flag above isn't read for rendering.
+                if (toolType != "eraser" || currentEraserMode != "pixel") {
+                    setEraserCursor(drawingEngine, 0f, 0f, 0f, false)
+                }
                 applyCurrentToolToEngine(drawingEngine)
             }
         }
