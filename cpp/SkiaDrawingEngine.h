@@ -109,6 +109,7 @@ public:
 
     // Eraser cursor (for pixel eraser visualization)
     void setEraserCursor(float x, float y, float radius, bool visible);
+    bool isEraserCursorVisible() const;
 
     // Serialization
     std::vector<uint8_t> serializeDrawing();

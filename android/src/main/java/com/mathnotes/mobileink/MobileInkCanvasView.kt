@@ -1092,23 +1092,16 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         currentStrokeColor = color
         resetTransientInteractionState()
 
-        // Hide eraser cursor if switching away from pixel eraser
-        if (toolType != "eraser" || eraserMode != "pixel") {
-            showEraserCursor = false
-        }
-
-        // Queue engine operations to GL thread
+        // Queue engine operations to GL thread. The eraser cursor is hidden
+        // centrally in SkiaDrawingEngine::setToolWithParams (reached via
+        // applyCurrentToolToEngine) from the supplied tool/mode, so no
+        // race-prone cursor check is needed here.
         queueEvent {
             if (drawingEngine != 0L) {
                 // Clear selection when switching away from select tool
                 if (toolType != "select") {
                     clearSelection(drawingEngine)
                     post { emitSelectionChange() }
-                }
-                // Hide the C++-rendered eraser cursor when leaving the pixel
-                // eraser; the local flag above isn't read for rendering.
-                if (toolType != "eraser" || currentEraserMode != "pixel") {
-                    setEraserCursor(drawingEngine, 0f, 0f, 0f, false)
                 }
                 applyCurrentToolToEngine(drawingEngine)
             }

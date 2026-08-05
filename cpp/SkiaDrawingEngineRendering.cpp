@@ -904,4 +904,9 @@ void SkiaDrawingEngine::setEraserCursor(float x, float y, float radius, bool vis
     showEraserCursor_ = visible;
 }
 
+bool SkiaDrawingEngine::isEraserCursorVisible() const {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+    return showEraserCursor_;
+}
+
 } // namespace nativedrawing
