@@ -43,6 +43,8 @@ The C++ layer owns high-frequency drawing behavior: active stroke rendering, pat
 
 `ContinuousEnginePool` defaults to three engines. During viewport movement, the transform stays on the UI thread. When motion settles, the pool assigns engines around the settled page. Dirty pages are serialized before a pooled engine is reused for another page.
 
+Virtualizing native canvases the way a list virtualizes rows does not work here: creating and destroying GPU contexts mid-scroll contends with the thread presenting frames, so every page crossing becomes a stutter. Pooling a fixed set of engines and moving page assignment between them is what keeps allocations flat during long-document scrolling. [Four Engines in Nine Months](https://medium.com/@markmiller0470/four-engines-in-nine-months-what-it-actually-takes-to-build-a-performant-notebook-app-8cc3f6cf9bfc) walks through the approaches that failed first and the settle-handoff behavior that hides engine load time.
+
 ## Serialization
 
 A `SerializedNotebookData` payload is plain JSON:
