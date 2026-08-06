@@ -43,6 +43,9 @@ jobs:
       - name: Run native serialization smoke test
         run: npm run test:native:smoke
 
+      - name: Run eraser cursor regression test
+        run: npm run test:native:eraser-smoke
+
       - name: Build package artifacts
         run: npm run build
 

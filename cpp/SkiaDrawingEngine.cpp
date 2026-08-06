@@ -699,6 +699,13 @@ void SkiaDrawingEngine::clear() {
 
     commitDelta(std::move(delta));
 
+    // Reset the transient eraser cursor so a pooled engine reused for a new
+    // page doesn't render a stale cursor circle at the old coordinates.
+    showEraserCursor_ = false;
+    eraserCursorRadius_ = 0.0f;
+    eraserCursorX_ = 0.0f;
+    eraserCursorY_ = 0.0f;
+
     markStrokeCachesDirty();
     needsEraserMaskRedraw_ = true;
 }
@@ -766,6 +773,20 @@ void SkiaDrawingEngine::setToolWithParams(const char* toolType, float width, uin
         currentPaint_.setColor(SkColorSetARGB(toolAlpha, b, g, r));  // Swap R and B for platform
     }
     eraserMode_ = (eraserMode && std::strlen(eraserMode) > 0) ? eraserMode : "pixel";
+
+    // Centralized eraser-cursor lifecycle. Decide purely from THIS call's
+    // supplied tool/mode -- not mutable state read later on another thread --
+    // so a subsequent tool change can't race the check. Both Android bridge
+    // paths (setTool and setToolWithParams) funnel through here, making this the
+    // single authoritative hide point on a tool/mode switch.
+    const std::string incomingTool = toolType ? toolType : "";
+    const bool isPixelEraser = (incomingTool == "eraser") && (eraserMode_ == "pixel");
+    if (!isPixelEraser) {
+        showEraserCursor_ = false;
+        eraserCursorRadius_ = 0.0f;
+        eraserCursorX_ = 0.0f;
+        eraserCursorY_ = 0.0f;
+    }
 }
 
 void SkiaDrawingEngine::setTool(const char* toolType) {

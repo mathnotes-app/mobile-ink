@@ -1269,6 +1269,9 @@ class MobileInkCanvasView: MTKView {
         hasSelectionMoveDelta = false
         isHoldToShapeStrokeActive = false
         lastDragPoint = nil
+        // Hide the eraser cursor overlay so a pooled view reassigned to a new
+        // page doesn't keep showing a stale cursor circle.
+        updateEraserCursor(at: nil, width: 0)
     }
 
     @objc func getBase64PngData(_ scale: CGFloat, callback: @escaping RCTResponseSenderBlock) {
