@@ -423,10 +423,29 @@ function InfiniteInkCanvasImpl(
     });
   }, [assignEnginesToPage, contentPadding, pageHeight, setCurrentPage]);
 
-  const addPage = useCallback(async () => {
+  const revealPagePosition = useCallback((pageIndex: number, pageY: number, animated = true) => {
+    const transform = latestTransformRef.current;
+    const scale = transform?.scale ?? 1;
+    const containerHeight = transform?.containerHeight ?? 0;
+    // Keep the edit point clear of the keyboard while leaving enough of the
+    // following page visible to make continuous writing feel natural.
+    const targetScreenY = Math.min(220, Math.max(96, containerHeight * 0.35));
+    const contentY = contentPadding + pageIndex * pageHeight + pageY;
+    setCurrentPage(pageIndex);
+    setVisibleBackgroundPageIndex(pageIndex);
+    void assignEnginesToPage(pageIndex);
+    viewportRef.current?.setTransform({
+      translateY: targetScreenY - contentY * scale,
+      animated,
+    });
+  }, [assignEnginesToPage, contentPadding, pageHeight, setCurrentPage]);
+
+  const addPage = useCallback(async (options?: { force?: boolean; scroll?: boolean }) => {
+    const force = options?.force ?? false;
+    const shouldScroll = options?.scroll ?? true;
     const capturedPages = await captureDirtyPages();
     const lastPage = capturedPages[capturedPages.length - 1];
-    const pagesWithWritableBlank = lastPage && pageHasContent(lastPage, dirtyPageIdsRef.current)
+    const pagesWithWritableBlank = lastPage && (force || pageHasContent(lastPage, dirtyPageIdsRef.current))
       ? [...capturedPages, createBlankPage(capturedPages.length)]
       : capturedPages;
     if (pagesWithWritableBlank !== capturedPages) {
@@ -434,7 +453,7 @@ function InfiniteInkCanvasImpl(
     }
     const trailingBlankPageIndex = Math.max(0, pagesWithWritableBlank.length - 1);
     setCurrentPage(trailingBlankPageIndex);
-    scrollToPage(trailingBlankPageIndex, true);
+    if (shouldScroll) scrollToPage(trailingBlankPageIndex, true);
     void assignEnginesToPage(trailingBlankPageIndex);
   }, [
     assignEnginesToPage,
@@ -473,6 +492,7 @@ function InfiniteInkCanvasImpl(
       await assignEnginesToPage(0);
     },
     addPage,
+    revealPagePosition,
     undo: () => getActiveSlot()?.undo(),
     redo: () => getActiveSlot()?.redo(),
     clearCurrentPage: () => {
@@ -546,6 +566,7 @@ function InfiniteInkCanvasImpl(
     pageWidth,
     replacePages,
     renderBackend,
+    revealPagePosition,
     scrollToPage,
     setCurrentPage,
   ]);
