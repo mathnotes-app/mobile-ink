@@ -40,6 +40,9 @@ jobs:
       - name: Run Jest tests
         run: npm test
 
+      - name: Test release automation
+        run: npm run test:release
+
       - name: Run native serialization smoke test
         run: npm run test:native:smoke
 

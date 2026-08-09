@@ -52,14 +52,7 @@ jobs:
         env:
           PACKAGE_NAME: ${{ steps.package.outputs.name }}
           PACKAGE_VERSION: ${{ steps.package.outputs.version }}
-        run: |
-          set -euo pipefail
-          published_version="$(npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version --json 2>/dev/null || true)"
-          if [[ "$published_version" == "\"${PACKAGE_VERSION}\"" ]]; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_publish=true" >> "$GITHUB_OUTPUT"
-          fi
+        run: node scripts/check-npm-version.mjs
 
       - name: Install dependencies
         if: steps.registry.outputs.should_publish == 'true'
