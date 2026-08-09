@@ -24,7 +24,7 @@ export type InfiniteInkViewportTransform = {
 export type InfiniteInkCanvasRef = {
   getNotebookData: () => Promise<SerializedNotebookData>;
   loadNotebookData: (data: SerializedNotebookData | string) => Promise<void>;
-  addPage: () => Promise<void>;
+  addPage: (options?: { force?: boolean; scroll?: boolean }) => Promise<void>;
   undo: () => void;
   redo: () => void;
   clearCurrentPage: () => void;
@@ -32,6 +32,8 @@ export type InfiniteInkCanvasRef = {
   resetViewport: (animated?: boolean) => void;
   getCurrentPageIndex: () => number;
   scrollToPage: (pageIndex: number, animated?: boolean) => void;
+  /** Scroll just enough to place a point on a page in the comfortable typing area. */
+  revealPagePosition: (pageIndex: number, pageY: number, animated?: boolean) => void;
   runBenchmark?: (options?: NativeInkBenchmarkOptions) => Promise<NativeInkBenchmarkResult>;
   startBenchmarkRecording?: (options?: NativeInkBenchmarkRecordingOptions) => Promise<boolean>;
   stopBenchmarkRecording?: () => Promise<NativeInkBenchmarkResult>;
