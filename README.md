@@ -181,6 +181,7 @@ The Android example runs the drawing canvas path. The benchmark screen and CPU/G
 
 - [Architecture](docs/architecture.md)
 - [API Reference](docs/api.md)
+- [Release Process](docs/releasing.md)
 - [Changelog](CHANGELOG.md)
 - [Four Engines in Nine Months](https://medium.com/@markmiller0470/four-engines-in-nine-months-what-it-actually-takes-to-build-a-performant-notebook-app-8cc3f6cf9bfc) - engineering write-up on stroke geometry, native memory, zoom, and page pooling
 
