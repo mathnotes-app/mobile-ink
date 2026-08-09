@@ -1,5 +1,6 @@
 import type { NotebookPage } from "../types";
 import {
+  appendWritableBlankPage,
   BLANK_PAGE_PAYLOAD,
   withSingleTrailingBlankPage,
 } from "../utils/pageGrowth";
@@ -88,5 +89,31 @@ describe("withSingleTrailingBlankPage", () => {
       "page-2",
       "page-3",
     ]);
+  });
+});
+
+describe("appendWritableBlankPage", () => {
+  it("does not append after an unused trailing blank by default", () => {
+    const pages = [page("page-1")];
+
+    expect(appendWritableBlankPage(pages)).toEqual({
+      pages,
+      appendedPageId: null,
+    });
+  });
+
+  it("keeps a force-appended page through normalization when retained", () => {
+    const result = appendWritableBlankPage([page("page-1")], new Set(), true);
+    expect(result.appendedPageId).not.toBeNull();
+
+    const normalized = withSingleTrailingBlankPage(
+      result.pages,
+      new Set(),
+      new Set([result.appendedPageId!]),
+    );
+
+    expect(normalized).toBe(result.pages);
+    expect(normalized).toHaveLength(2);
+    expect(normalized[1].id).toBe(result.appendedPageId);
   });
 });

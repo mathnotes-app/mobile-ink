@@ -19,6 +19,36 @@ const toFiniteNumber = (value: number, fallback: number) => (
   Number.isFinite(value) ? value : fallback
 );
 
+export const getRevealTargetScreenY = (containerHeight: number): number => {
+  const resolvedContainerHeight = Math.max(
+    0,
+    toFiniteNumber(containerHeight, 0),
+  );
+  return Math.min(220, Math.max(96, resolvedContainerHeight * 0.35));
+};
+
+export const getRevealTranslateY = (
+  contentY: number,
+  targetScreenY: number,
+  scale: number,
+  containerHeight: number,
+): number => {
+  const resolvedContentY = toFiniteNumber(contentY, 0);
+  const resolvedTargetScreenY = toFiniteNumber(targetScreenY, 0);
+  const resolvedScale = Math.max(0.0001, toFiniteNumber(scale, 1));
+  const resolvedContainerHeight = Math.max(
+    0,
+    toFiniteNumber(containerHeight, 0),
+  );
+  const originY = resolvedContainerHeight / 2;
+
+  return (
+    resolvedTargetScreenY -
+    originY -
+    resolvedScale * (resolvedContentY - originY)
+  );
+};
+
 export const getVisibleContentRect = (
   transform: ViewportTransformLike,
 ): VisibleContentRect => {
