@@ -53,15 +53,27 @@ export const getLastContentPageIndex = (
 export const withSingleTrailingBlankPage = (
   pages: NotebookPage[],
   dirtyPageIds: Set<string> = new Set(),
+  retainedPageIds: Set<string> = new Set(),
 ) => {
   const sourcePages = pages.length > 0 ? pages : [createBlankPage(0)];
   const lastContentPageIndex = getLastContentPageIndex(sourcePages, dirtyPageIds);
   const lastContentPage = sourcePages[lastContentPageIndex];
   const needsTrailingBlank =
     !lastContentPage || !pageHasPdfBackground(lastContentPage);
-  const desiredPageCount = Math.max(
+  const normalizedPageCount = Math.max(
     1,
     lastContentPageIndex + (needsTrailingBlank ? 2 : 1),
+  );
+  let lastRetainedPageIndex = -1;
+  for (let pageIndex = sourcePages.length - 1; pageIndex >= 0; pageIndex -= 1) {
+    if (retainedPageIds.has(sourcePages[pageIndex].id)) {
+      lastRetainedPageIndex = pageIndex;
+      break;
+    }
+  }
+  const desiredPageCount = Math.max(
+    normalizedPageCount,
+    lastRetainedPageIndex + 1,
   );
 
   if (sourcePages.length === desiredPageCount) {
@@ -74,4 +86,21 @@ export const withSingleTrailingBlankPage = (
   }
 
   return nextPages;
+};
+
+export const appendWritableBlankPage = (
+  pages: NotebookPage[],
+  contentPageIds: Set<string> = new Set(),
+  force = false,
+): { pages: NotebookPage[]; appendedPageId: string | null } => {
+  const lastPage = pages[pages.length - 1];
+  if (!lastPage || (!force && !pageHasContent(lastPage, contentPageIds))) {
+    return { pages, appendedPageId: null };
+  }
+
+  const appendedPage = createBlankPage(pages.length);
+  return {
+    pages: [...pages, appendedPage],
+    appendedPageId: appendedPage.id,
+  };
 };

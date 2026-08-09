@@ -1,4 +1,36 @@
-import { getVisibleContentRect } from "../viewportTransform";
+import {
+  getRevealTargetScreenY,
+  getRevealTranslateY,
+  getVisibleContentRect,
+} from "../viewportTransform";
+
+describe("reveal position transform", () => {
+  it("places content at the target screen position at 1x scale", () => {
+    expect(getRevealTranslateY(400, 210, 1, 600)).toBe(-190);
+  });
+
+  it("accounts for the viewport-center transform origin while zoomed", () => {
+    const containerHeight = 600;
+    const contentY = 400;
+    const scale = 2;
+    const targetScreenY = 210;
+    const translateY = getRevealTranslateY(
+      contentY,
+      targetScreenY,
+      scale,
+      containerHeight,
+    );
+    const originY = containerHeight / 2;
+    const actualScreenY = originY + translateY + scale * (contentY - originY);
+
+    expect(actualScreenY).toBe(targetScreenY);
+  });
+
+  it("uses the keyboard-resized container height for the safe target", () => {
+    expect(getRevealTargetScreenY(400)).toBe(140);
+    expect(getRevealTargetScreenY(800)).toBe(220);
+  });
+});
 
 describe("getVisibleContentRect", () => {
   it("matches top-left translation at 1x scale", () => {

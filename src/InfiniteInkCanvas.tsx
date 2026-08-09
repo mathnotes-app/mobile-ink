@@ -46,15 +46,18 @@ import type {
 import { getContinuousEnginePoolRange } from "./utils/continuousEnginePool";
 import { computeDataSignature } from "./utils/dataSignature";
 import {
+  appendWritableBlankPage,
   BLANK_PAGE_PAYLOAD,
-  createBlankPage,
-  pageHasContent,
   withSingleTrailingBlankPage,
 } from "./utils/pageGrowth";
 import {
   getNativeRenderScaleBudget,
   quantizeNativeRenderScale,
 } from "./utils/nativeRenderScale";
+import {
+  getRevealTargetScreenY,
+  getRevealTranslateY,
+} from "./utils/viewportTransform";
 
 export type {
   InfiniteInkCanvasProps,
@@ -134,6 +137,7 @@ function InfiniteInkCanvasImpl(
   const viewportRef = useRef<ZoomableInkViewportRef | null>(null);
   const perPageSlotRefs = useRef(new Map<string, ContinuousEnginePoolSlotRef>());
   const dirtyPageIdsRef = useRef(new Set<string>());
+  const retainedBlankPageIdsRef = useRef(new Set<string>());
   const lastEditedPageIdRef = useRef<string | null>(null);
   const nativeReadyRef = useRef(false);
   const benchmarkRecordingOptionsRef = useRef<NativeInkBenchmarkRecordingOptions | null>(null);
@@ -187,6 +191,7 @@ function InfiniteInkCanvasImpl(
     const nextPages = withSingleTrailingBlankPage(
       pagesRef.current,
       dirtyPageIdsRef.current,
+      retainedBlankPageIdsRef.current,
     );
     if (nextPages !== pagesRef.current) {
       replacePages(nextPages);
@@ -312,7 +317,11 @@ function InfiniteInkCanvasImpl(
       page.id === pageId ? withCapturedPageData(page, data, previewUri) : page
     ));
     dirtyPageIdsRef.current.delete(pageId);
-    replacePages(withSingleTrailingBlankPage(nextPages, dirtyPageIdsRef.current));
+    replacePages(withSingleTrailingBlankPage(
+      nextPages,
+      dirtyPageIdsRef.current,
+      retainedBlankPageIdsRef.current,
+    ));
   }, [replacePages]);
 
   const handleDrawingChange = useCallback((pageId: string) => {
@@ -398,6 +407,7 @@ function InfiniteInkCanvasImpl(
     const normalizedPages = withSingleTrailingBlankPage(
       nextPages,
       dirtyPageIdsRef.current,
+      retainedBlankPageIdsRef.current,
     );
 
     if (didChange || normalizedPages !== pagesRef.current) {
@@ -423,18 +433,53 @@ function InfiniteInkCanvasImpl(
     });
   }, [assignEnginesToPage, contentPadding, pageHeight, setCurrentPage]);
 
-  const addPage = useCallback(async () => {
+  const revealPagePosition = useCallback((pageIndex: number, pageY: number, animated = true) => {
+    const boundedPageIndex = Math.max(
+      0,
+      Math.min(pagesRef.current.length - 1, pageIndex),
+    );
+    const boundedPageY = Math.max(
+      0,
+      Math.min(pageHeight, Number.isFinite(pageY) ? pageY : 0),
+    );
+    const transform = viewportRef.current?.getTransform() ?? latestTransformRef.current;
+    const scale = transform?.scale ?? 1;
+    const containerHeight = transform?.containerHeight ?? 0;
+    // Keep the edit point clear of the keyboard while leaving enough of the
+    // following page visible to make continuous writing feel natural.
+    const targetScreenY = getRevealTargetScreenY(containerHeight);
+    const contentY = contentPadding + boundedPageIndex * pageHeight + boundedPageY;
+    setCurrentPage(boundedPageIndex);
+    setVisibleBackgroundPageIndex(boundedPageIndex);
+    void assignEnginesToPage(boundedPageIndex);
+    viewportRef.current?.setTransform({
+      translateY: getRevealTranslateY(
+        contentY,
+        targetScreenY,
+        scale,
+        containerHeight,
+      ),
+      animated,
+    });
+  }, [assignEnginesToPage, contentPadding, pageHeight, setCurrentPage]);
+
+  const addPage = useCallback(async (options?: { force?: boolean; scroll?: boolean }) => {
+    const force = options?.force ?? false;
+    const shouldScroll = options?.scroll ?? true;
     const capturedPages = await captureDirtyPages();
-    const lastPage = capturedPages[capturedPages.length - 1];
-    const pagesWithWritableBlank = lastPage && pageHasContent(lastPage, dirtyPageIdsRef.current)
-      ? [...capturedPages, createBlankPage(capturedPages.length)]
-      : capturedPages;
+    const {
+      pages: pagesWithWritableBlank,
+      appendedPageId,
+    } = appendWritableBlankPage(capturedPages, dirtyPageIdsRef.current, force);
+    if (appendedPageId && force) {
+      retainedBlankPageIdsRef.current.add(appendedPageId);
+    }
     if (pagesWithWritableBlank !== capturedPages) {
       replacePages(pagesWithWritableBlank);
     }
     const trailingBlankPageIndex = Math.max(0, pagesWithWritableBlank.length - 1);
     setCurrentPage(trailingBlankPageIndex);
-    scrollToPage(trailingBlankPageIndex, true);
+    if (shouldScroll) scrollToPage(trailingBlankPageIndex, true);
     void assignEnginesToPage(trailingBlankPageIndex);
   }, [
     assignEnginesToPage,
@@ -458,6 +503,7 @@ function InfiniteInkCanvasImpl(
 
       const nextPages = withSingleTrailingBlankPage(parsed.pages.map(clonePage));
       dirtyPageIdsRef.current.clear();
+      retainedBlankPageIdsRef.current.clear();
       perPageSlotRefs.current.clear();
       activeSelectionPageIdRef.current = null;
       setSelectionTouchRects([]);
@@ -473,6 +519,7 @@ function InfiniteInkCanvasImpl(
       await assignEnginesToPage(0);
     },
     addPage,
+    revealPagePosition,
     undo: () => getActiveSlot()?.undo(),
     redo: () => getActiveSlot()?.redo(),
     clearCurrentPage: () => {
@@ -491,7 +538,11 @@ function InfiniteInkCanvasImpl(
               }
             : candidatePage
         ));
-        replacePages(withSingleTrailingBlankPage(nextPages, dirtyPageIdsRef.current));
+        replacePages(withSingleTrailingBlankPage(
+          nextPages,
+          dirtyPageIdsRef.current,
+          retainedBlankPageIdsRef.current,
+        ));
       }
     },
     setTool: (nextToolState) => {
@@ -546,6 +597,7 @@ function InfiniteInkCanvasImpl(
     pageWidth,
     replacePages,
     renderBackend,
+    revealPagePosition,
     scrollToPage,
     setCurrentPage,
   ]);

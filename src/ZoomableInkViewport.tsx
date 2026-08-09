@@ -135,14 +135,21 @@ const ZoomableInkViewport = forwardRef<ZoomableInkViewportRef, ZoomableInkViewpo
 
     const handleLayout = useCallback((event: LayoutChangeEvent) => {
       const { width, height } = event.nativeEvent.layout;
+      const prevWidth = containerWidth.value;
       const prevHeight = containerHeight.value;
       containerWidth.value = width;
       containerHeight.value = height;
 
-      // On orientation change, reset pan/zoom to defaults
-      // Use 200px threshold to avoid false positives from toolbar show/hide (52px)
-      // Actual orientation changes cause hundreds of pixels of difference
-      const isOrientationChange = prevHeight > 0 && Math.abs(height - prevHeight) > 200;
+      // On orientation change, reset pan/zoom to defaults. A software keyboard
+      // can shrink the viewport height by several hundred pixels too, but it
+      // does not rotate the viewport: its width stays stable. Treating that as
+      // an orientation change recenters the document and hides the active text
+      // box behind the keyboard.
+      const isOrientationChange =
+        prevWidth > 0 &&
+        prevHeight > 0 &&
+        Math.abs(width - prevWidth) > 200 &&
+        Math.abs(height - prevHeight) > 200;
       if (isOrientationChange) {
         // Reset to initial state - CSS handles positioning (flex-start in landscape, center in portrait)
         translateX.value = 0;
