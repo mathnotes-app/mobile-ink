@@ -1862,8 +1862,6 @@ extension MobileInkCanvasView {
       && (pendingTool == "pen"
         || pendingTool == "pencil"
         || pendingTool == "marker"
-        || pendingTool == "highlighter"
-        || pendingTool == "crayon"
         || pendingTool == "calligraphy")
   }
 

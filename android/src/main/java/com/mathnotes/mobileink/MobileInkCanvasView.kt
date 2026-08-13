@@ -602,8 +602,6 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         return currentToolType == "pen" ||
             currentToolType == "pencil" ||
             currentToolType == "marker" ||
-            currentToolType == "highlighter" ||
-            currentToolType == "crayon" ||
             currentToolType == "calligraphy"
     }
 
