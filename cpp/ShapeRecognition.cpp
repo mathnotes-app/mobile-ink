@@ -95,8 +95,6 @@ bool canRecognizeShapeForTool(const std::string& toolType) {
     return toolType == "pen"
         || toolType == "pencil"
         || toolType == "marker"
-        || toolType == "highlighter"
-        || toolType == "crayon"
         || toolType == "calligraphy";
 }
 
