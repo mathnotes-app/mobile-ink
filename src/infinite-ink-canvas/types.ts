@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { StyleProp, ViewStyle } from "react-native";
 import type { ContinuousEnginePoolToolState } from "../ContinuousEnginePool";
 import type {
@@ -54,6 +55,12 @@ export type InfiniteInkCanvasProps = {
   maxScale?: number;
   contentPadding?: number;
   showPageLabels?: boolean;
+  /**
+   * Optional app-owned content rendered inside the UI-thread transformed
+   * viewport. Use this for overlays that must stay synchronized with ink
+   * while the canvas pans or zooms.
+   */
+  overlay?: ReactNode;
   onReady?: () => void;
   onDrawingChange?: (pageId: string) => void;
   onSelectionChange?: (

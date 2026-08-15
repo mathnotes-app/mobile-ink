@@ -27,6 +27,9 @@ High-level continuous notebook component.
 - `pageWidth` / `pageHeight`: logical page size.
 - `minScale` / `maxScale`: viewport zoom bounds.
 - `showPageLabels`: whether the generic example-style page number labels render.
+- `overlay`: optional app-owned React content rendered inside the UI-thread
+  transformed viewport. Use this for images, text boxes, or other overlays
+  that must stay synchronized with ink during panning and zooming.
 - `onDrawingChange(pageId)`: called when a page becomes dirty.
 - `onCurrentPageChange(pageIndex)`: called when the settled/current page changes.
 - `onPagesChange(pages)`: called when page growth or trimming changes the page array.
