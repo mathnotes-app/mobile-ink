@@ -33,11 +33,17 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
 
+      # registry-url is deliberately omitted. Setting it makes setup-node write
+      # "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" into .npmrc. This job has no
+      # NODE_AUTH_TOKEN because it authenticates via OIDC trusted publishing, so the
+      # placeholder would expand to an empty string, npm would read that as "credentials
+      # already configured", skip the OIDC token exchange, and publish anonymously. The
+      # registry rejects that with E404. npm defaults to https://registry.npmjs.org
+      # anyway, so the pin bought nothing. See https://github.com/npm/documentation/issues/1960
       - name: Setup Node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
       - name: Install OIDC-capable npm CLI
@@ -62,9 +68,23 @@ jobs:
         if: steps.registry.outputs.should_publish == 'true'
         run: npm run build
 
+      # Publishing here is authenticated by OIDC, not by a token, so npm must find no
+      # credential configured or it will skip the OIDC exchange entirely. Guard the
+      # invariant rather than trusting it: an anonymous publish fails at the registry
+      # with a bare E404 that points nowhere near the cause.
+      - name: Verify no npm credential is configured
+        if: steps.registry.outputs.should_publish == 'true'
+        run: |
+          set -euo pipefail
+          npmrc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          if [ -f "$npmrc" ] && grep -q '_authToken' "$npmrc"; then
+            echo "::error::$npmrc sets _authToken, so npm will skip the OIDC exchange and publish anonymously. Remove the credential (setup-node writes one when given registry-url)."
+            exit 1
+          fi
+
       - name: Publish package
         if: steps.registry.outputs.should_publish == 'true'
-        run: npm publish --access public --ignore-scripts
+        run: npm publish --access public --ignore-scripts --registry https://registry.npmjs.org
 
       - name: Create GitHub release
         env:
