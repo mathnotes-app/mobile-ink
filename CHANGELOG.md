@@ -2,10 +2,11 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
-## [0.3.3] - 2026-08-09
+## [0.3.3] - 2026-08-14
 
 - Prevented software-keyboard viewport resizes from being treated as orientation changes.
 - Added canvas APIs for revealing a page position and adding a page without automatically scrolling, enabling keyboard-safe text editing in host apps.
+- Corrected viewport reveal behavior and trailing-page retention.
 
 ## [0.3.2] - 2026-07-15
 
