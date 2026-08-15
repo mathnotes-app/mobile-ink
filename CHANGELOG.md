@@ -2,6 +2,12 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [0.3.3] - 2026-08-14
+
+- Prevented software-keyboard viewport resizes from being treated as orientation changes.
+- Added canvas APIs for revealing a page position and adding a page without automatically scrolling, enabling keyboard-safe text editing in host apps.
+- Corrected viewport reveal behavior and trailing-page retention.
+
 ## [0.3.2] - 2026-07-15
 
 - Smoothed zoomed drawing and erasing: highlighter and marker render as a single constant-width stroked centerline (no more segment seams at high zoom), the pixel eraser defers stroke bookkeeping to pen-up, and the zoomed stroke preview anchors a constant-memory surface to the viewport instead of allocating canvas-times-zoom pixels.
