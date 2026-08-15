@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../cpp/DrawingSerialization.h"
+#include "../cpp/ShapeRecognition.h"
 
 using namespace nativedrawing;
 
@@ -36,6 +37,34 @@ bool expect(bool condition, const std::string& message) {
 
 bool approxEqual(float lhs, float rhs, float epsilon = 0.001f) {
   return std::fabs(lhs - rhs) <= epsilon;
+}
+
+bool testHoldToShapeRecognitionRespectsToolIntent() {
+  auto point = [](float x, long timestamp) {
+    Point value{};
+    value.x = x;
+    value.y = 0.0f;
+    value.pressure = 1.0f;
+    value.calculatedWidth = 4.0f;
+    value.timestamp = timestamp;
+    return value;
+  };
+
+  const std::vector<Point> heldLine = {
+      point(0.0f, 100),
+      point(50.0f, 150),
+      point(100.0f, 200),
+      point(100.0f, 550),
+  };
+
+  const ShapeCandidate penCandidate = recognizeHeldShape(heldLine, "pen", 550);
+  const ShapeCandidate crayonCandidate = recognizeHeldShape(heldLine, "crayon", 550);
+  const ShapeCandidate highlighterCandidate = recognizeHeldShape(heldLine, "highlighter", 550);
+
+  return expect(penCandidate.recognized, "held pen line should still be recognized") &&
+         expect(penCandidate.toolType == "shape-line", "held pen line should become a line shape") &&
+         expect(!crayonCandidate.recognized, "held crayon stroke should remain freehand") &&
+         expect(!highlighterCandidate.recognized, "held highlighter stroke should remain freehand");
 }
 
 bool testDeserializeAcceptsEmptyValidPayload() {
@@ -206,7 +235,8 @@ int main() {
       testDeserializeRejectsTruncatedPayload() &&
       testDeserializeRejectsUnsupportedVersion() &&
       testDeserializeRejectsImpossiblePointCount() &&
-      testMixedValidAndInvalidPayloadsNeverCrash();
+      testMixedValidAndInvalidPayloadsNeverCrash() &&
+      testHoldToShapeRecognitionRespectsToolIntent();
 
   if (!passed) {
     return 1;
