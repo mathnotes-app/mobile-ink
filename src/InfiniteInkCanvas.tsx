@@ -107,6 +107,7 @@ function InfiniteInkCanvasImpl(
     maxScale = 5,
     contentPadding = DEFAULT_CONTENT_PADDING,
     showPageLabels = true,
+    overlay,
     onReady,
     onDrawingChange,
     onSelectionChange,
@@ -670,6 +671,7 @@ function InfiniteInkCanvasImpl(
               shouldCaptureBeforeReassign={shouldCaptureBeforeReassign}
               onSlotCaptureBeforeUnmount={updatePageData}
             />
+            {overlay}
             <PageBreaks pages={pages} pageHeight={pageHeight} />
           </View>
         </View>

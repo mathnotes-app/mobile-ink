@@ -2,6 +2,13 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [0.3.4] - 2026-08-15
+
+- Added the optional `overlay` prop to `InfiniteInkCanvas`. Host applications
+  can render React overlays inside the UI-thread transformed viewport, keeping
+  inserted images, text boxes, and other page content synchronized with ink
+  during panning and zooming.
+
 ## [0.3.3] - 2026-08-14
 
 - Prevented software-keyboard viewport resizes from being treated as orientation changes.
