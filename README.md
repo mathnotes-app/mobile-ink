@@ -16,6 +16,17 @@ Production-grade React Native ink primitives extracted from the MathNotes canvas
 
 `@mathnotes/mobile-ink` is an iOS-first native drawing engine for React Native apps. It gives you Apple Pencil input, Skia/Metal rendering, stroke serialization, selection, zoom, momentum scrolling, and a continuous notebook surface backed by a fixed native engine pool.
 
+## Demos
+
+| Drawing and tools | Selection | Large notebook interaction |
+| --- | --- | --- |
+| ![Drawing with Mobile Ink](https://raw.githubusercontent.com/mathnotes-app/mobile-ink/main/docs/assets/mobile-ink-sketch.gif) | ![Selection editing](https://raw.githubusercontent.com/mathnotes-app/mobile-ink/main/docs/assets/selection-editing-demo.gif) | ![Large notebook interaction](https://raw.githubusercontent.com/mathnotes-app/mobile-ink/main/docs/assets/large-notebook-performance.gif) |
+
+Full clips:
+[drawing, tools, and shapes](https://raw.githubusercontent.com/mathnotes-app/mobile-ink/main/docs/assets/tools-and-shapes-demo.mp4),
+[selection editing](https://raw.githubusercontent.com/mathnotes-app/mobile-ink/main/docs/assets/selection-editing-demo.mp4),
+[large notebook performance](https://raw.githubusercontent.com/mathnotes-app/mobile-ink/main/docs/assets/large-notebook-performance.mp4).
+
 ## A Note To Contributors
 
 Mobile Ink is young, but the goal is serious: make high-quality mobile ink available to every React Native team that needs it. If you try the package, report a bug, improve docs, test it on a real device, suggest an API shape, or think through a native rendering problem with us, thank you. Notes-app canvases are full of sharp edges, and thoughtful feedback from people building real apps is one of the most valuable contributions this project can get.
@@ -60,17 +71,6 @@ Mobile Ink is for React Native teams building serious handwritten note-taking, w
 | Example app | Expo dev-client app with blank continuous notebook, tools, selection, save/reload, and zoom |
 | Android | V1 native drawing support with GPU-backed Ganesh rendering, pooled pages, previews, save/reload, eraser, selection, and PDF backgrounds |
 | Expo Go | Not supported because this package includes native code |
-
-## Demos
-
-| Drawing and tools | Selection | Large notebook interaction |
-| --- | --- | --- |
-| ![Drawing with Mobile Ink](https://raw.githubusercontent.com/mathnotes-app/mobile-ink/main/docs/assets/mobile-ink-sketch.gif) | ![Selection editing](https://raw.githubusercontent.com/mathnotes-app/mobile-ink/main/docs/assets/selection-editing-demo.gif) | ![Large notebook interaction](https://raw.githubusercontent.com/mathnotes-app/mobile-ink/main/docs/assets/large-notebook-performance.gif) |
-
-Full clips:
-[drawing, tools, and shapes](https://raw.githubusercontent.com/mathnotes-app/mobile-ink/main/docs/assets/tools-and-shapes-demo.mp4),
-[selection editing](https://raw.githubusercontent.com/mathnotes-app/mobile-ink/main/docs/assets/selection-editing-demo.mp4),
-[large notebook performance](https://raw.githubusercontent.com/mathnotes-app/mobile-ink/main/docs/assets/large-notebook-performance.mp4).
 
 
 ## Install
