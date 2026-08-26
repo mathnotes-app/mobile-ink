@@ -2,6 +2,11 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [Unreleased]
+
+- Added unit tests for `normalizePagePayloadForNativeLoad` covering blank, malformed, and valid native-load payloads (#12).
+
+
 ## [0.3.4] - 2026-08-15
 
 - Added the optional `overlay` prop to `InfiniteInkCanvas`. Host applications
