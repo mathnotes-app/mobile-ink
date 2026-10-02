@@ -190,6 +190,28 @@ describe("ContinuousEnginePool", () => {
     expect(mockReleaseEngine).toHaveBeenCalledTimes(3);
   });
 
+  it("captures page data without rendering a preview when previews are off", async () => {
+    const pages = [page(0), page(1), page(2), page(3)];
+    const onSlotCaptureBeforeUnmount = jest.fn();
+    const { poolRef } = renderPool({
+      shouldCaptureBeforeReassign: jest.fn((pageId: string) => pageId === "page-0"),
+      capturePreviewOnReassign: false,
+      onSlotCaptureBeforeUnmount,
+    });
+    await act(async () => {});
+    mockGetBase64PngData.mockClear();
+
+    await assignPages(poolRef, buildAssignments(pages.slice(0, 3), 0));
+    await assignPages(poolRef, buildAssignments(pages.slice(1, 4), 1));
+
+    expect(onSlotCaptureBeforeUnmount).toHaveBeenCalledWith(
+      "page-0",
+      '{"pages":{"0":"persisted"}}',
+      undefined,
+    );
+    expect(mockGetBase64PngData).not.toHaveBeenCalled();
+  });
+
   it("defaults pooled native canvases to the Ganesh backend", async () => {
     renderPool();
 

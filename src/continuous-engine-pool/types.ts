@@ -89,6 +89,13 @@ export type ContinuousEnginePoolProps = {
     sourceRef?: ContinuousEnginePoolSlotRef,
   ) => void;
   shouldCaptureBeforeReassign: (pageId: string) => boolean;
+  /**
+   * Also render a PNG preview of a page captured before its slot is
+   * reassigned (passed as `previewUri` to onSlotCaptureBeforeUnmount).
+   * Defaults to true. Set false when previews are not used, to skip a
+   * native render and PNG encode on every page shift.
+   */
+  capturePreviewOnReassign?: boolean;
   onSlotCaptureBeforeUnmount: (
     pageId: string,
     data: string,
@@ -145,6 +152,7 @@ export type PooledCanvasSlotProps = {
     sourceRef?: ContinuousEnginePoolSlotRef,
   ) => void;
   shouldCaptureBeforeReassign: (pageId: string) => boolean;
+  capturePreviewOnReassign: boolean;
   onCaptureBeforeReassign: (
     pageId: string,
     data: string,

@@ -54,6 +54,7 @@ export const ContinuousEnginePool = memo(forwardRef<
   onPencilDoubleTap,
   registerPerPageSlot,
   shouldCaptureBeforeReassign,
+  capturePreviewOnReassign = true,
   onSlotCaptureBeforeUnmount,
 }, ref) {
   const slotRefs = useRef<Array<PooledCanvasSlotHandle | null>>([]);
@@ -294,6 +295,7 @@ export const ContinuousEnginePool = memo(forwardRef<
           onPencilDoubleTap={onPencilDoubleTap}
           registerRef={registerPerPageSlot}
           shouldCaptureBeforeReassign={shouldCaptureBeforeReassign}
+          capturePreviewOnReassign={capturePreviewOnReassign}
           onCaptureBeforeReassign={onSlotCaptureBeforeUnmount}
         />
       ))}
@@ -318,5 +320,6 @@ export const ContinuousEnginePool = memo(forwardRef<
   prev.onPencilDoubleTap === next.onPencilDoubleTap &&
   prev.registerPerPageSlot === next.registerPerPageSlot &&
   prev.shouldCaptureBeforeReassign === next.shouldCaptureBeforeReassign &&
+  prev.capturePreviewOnReassign === next.capturePreviewOnReassign &&
   prev.onSlotCaptureBeforeUnmount === next.onSlotCaptureBeforeUnmount
 ));
