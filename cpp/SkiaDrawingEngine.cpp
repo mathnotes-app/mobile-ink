@@ -684,6 +684,7 @@ void SkiaDrawingEngine::clear() {
     // the one operation that genuinely needs an O(N) snapshot to support
     // undo, but it happens once per clear (not per stroke), so the cost
     // is bounded.
+    cancelSelectionTransform();
     StrokeDelta delta;
     delta.kind = StrokeDelta::Kind::Clear;
     delta.clearedStrokes = strokes_;
@@ -691,6 +692,7 @@ void SkiaDrawingEngine::clear() {
 
     strokes_.clear();
     eraserCircles_.clear();
+    resetIndexedSelectionState();
     currentPoints_.clear();
     currentPath_.reset();
     clearActiveShapePreview();
@@ -714,10 +716,12 @@ void SkiaDrawingEngine::undo() {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
 
     if (undoStack_.empty()) return;
+    cancelSelectionTransform();
     StrokeDelta delta = std::move(undoStack_.back());
     undoStack_.pop_back();
     revertDelta(delta);
     redoStack_.push_back(std::move(delta));
+    resetIndexedSelectionState();
 
     cachedEraserCircleCount_ = 0;
     bakedCircleCount_ = 0;
@@ -731,10 +735,12 @@ void SkiaDrawingEngine::redo() {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
 
     if (redoStack_.empty()) return;
+    cancelSelectionTransform();
     StrokeDelta delta = std::move(redoStack_.back());
     redoStack_.pop_back();
     applyDelta(delta);
     undoStack_.push_back(std::move(delta));
+    resetIndexedSelectionState();
 
     cachedEraserCircleCount_ = 0;
     bakedCircleCount_ = 0;
@@ -855,18 +861,11 @@ bool SkiaDrawingEngine::deserializeDrawing(const std::vector<uint8_t>& data) {
         return false;
     }
 
+    cancelSelectionTransform();
     strokes_ = std::move(loadedStrokes);
     eraserCircles_.clear();  // Clear eraser circles when loading
     bakedCircleCount_ = 0;  // No circles to bake
-    selectedIndices_.clear();
-    isDraggingSelection_ = false;
-    hasDragCache_ = false;
-    selectionOffsetX_ = 0.0f;
-    selectionOffsetY_ = 0.0f;
-    dragBackgroundSnapshot_ = nullptr;
-    nonSelectedSnapshot_ = nullptr;
-    selectedSnapshot_ = nullptr;
-    selectionHighlightSnapshot_ = nullptr;
+    resetIndexedSelectionState();
     // Reset history. Loading a serialized notebook is treated as a
     // checkpoint -- the user wouldn't expect to undo past the load.
     undoStack_.clear();

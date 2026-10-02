@@ -49,6 +49,9 @@ jobs:
       - name: Run eraser cursor regression test
         run: npm run test:native:eraser-smoke
 
+      - name: Run selection history regression test
+        run: npm run test:native:selection-smoke
+
       - name: Build package artifacts
         run: npm run build
 

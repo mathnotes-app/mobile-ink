@@ -31,7 +31,7 @@ void SkiaDrawingEngine::eraseObjects() {
         std::unordered_map<size_t, size_t> oldToNew;
         size_t newIdx = 0;
         std::vector<Stroke> remaining;
-        remaining.reserve(strokes_.size() - indicesToRemove.size());
+        remaining.reserve(strokes_.size() - delta.removedStrokes.size());
 
         for (size_t i = 0; i < strokes_.size(); ++i) {
             if (indicesToRemove.count(i) == 0) {
@@ -49,6 +49,7 @@ void SkiaDrawingEngine::eraseObjects() {
         }
         if (remaining.size() != strokes_.size()) {
             strokes_ = remaining;
+            resetIndexedSelectionState();
             commitDelta(std::move(delta));
             markStrokeCachesDirty();
         }
