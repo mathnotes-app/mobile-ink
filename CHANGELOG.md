@@ -2,6 +2,10 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [0.3.7] - 2026-10-02
+
+- Added `capturePreviewOnReassign` to `ContinuousEnginePool` (default `true`). Hosts that don't use page previews can set it to `false` to skip the native render and PNG encode that runs for every captured page when the pool shifts. Page data is still captured.
+
 ## [0.3.6] - 2026-10-02
 
 - iOS: selection hit-testing, the selection toolbar and `onInkSelectionChange` now share one bounds helper that rejects non-finite geometry; the event sends `null` bounds instead of NaN. The selection toolbar ignores selection bounds that are not finite. Inverted or overflowing bounds previously produced a NaN frame and terminated the app with `CALayerInvalidGeometry` (seen in production after a pooled page was cleared with a live selection, which 0.3.5 also fixes at the source).

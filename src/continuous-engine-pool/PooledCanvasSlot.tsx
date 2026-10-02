@@ -73,6 +73,7 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
     onPencilDoubleTap,
     registerRef,
     shouldCaptureBeforeReassign,
+    capturePreviewOnReassign,
     onCaptureBeforeReassign,
   }, ref) {
     const slotViewRef = useRef<View | null>(null);
@@ -91,6 +92,7 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
     const forwardedReadyRef = useRef(false);
     const benchmarkRecordingActiveRef = useRef(false);
     const shouldCaptureBeforeReassignRef = useRef(shouldCaptureBeforeReassign);
+    const capturePreviewOnReassignRef = useRef(capturePreviewOnReassign);
     const captureCallbackRef = useRef(onCaptureBeforeReassign);
     const onCanvasReadyRef = useRef(onCanvasReady);
     const onSlotLoadedRef = useRef(onSlotLoaded);
@@ -98,6 +100,7 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
     const getToolStateRef = useRef(getToolState);
 
     shouldCaptureBeforeReassignRef.current = shouldCaptureBeforeReassign;
+    capturePreviewOnReassignRef.current = capturePreviewOnReassign;
     captureCallbackRef.current = onCaptureBeforeReassign;
     onCanvasReadyRef.current = onCanvasReady;
     onSlotLoadedRef.current = onSlotLoaded;
@@ -289,10 +292,12 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
         const data = await sourceRef.getBase64Data();
         if (data) {
           let previewUri: string | null = null;
-          try {
-            previewUri = await sourceRef.getBase64PngData(PAGE_PREVIEW_CAPTURE_SCALE);
-          } catch {
-            previewUri = null;
+          if (capturePreviewOnReassignRef.current) {
+            try {
+              previewUri = await sourceRef.getBase64PngData(PAGE_PREVIEW_CAPTURE_SCALE);
+            } catch {
+              previewUri = null;
+            }
           }
           captureCallbackRef.current(pageId, data, previewUri || undefined);
         }
@@ -683,6 +688,7 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
   prev.onPencilDoubleTap === next.onPencilDoubleTap &&
   prev.registerRef === next.registerRef &&
   prev.shouldCaptureBeforeReassign === next.shouldCaptureBeforeReassign &&
+  prev.capturePreviewOnReassign === next.capturePreviewOnReassign &&
   prev.onCaptureBeforeReassign === next.onCaptureBeforeReassign
 ));
 
