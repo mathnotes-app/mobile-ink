@@ -537,7 +537,13 @@ class MobileInkCanvasView: MTKView {
             height: CGFloat(bounds[3] - bounds[1]) / scaleY
         )
 
-        guard rect.width > 0, rect.height > 0 else {
+        // CGRect.width reports the standardized (absolute) width, so a rect
+        // built from inverted or overflowing bounds can pass a `> 0` check
+        // while its origin and midpoints are infinite or NaN. Setting such a
+        // frame raises CALayerInvalidGeometry and terminates the app.
+        guard rect.width > 0, rect.height > 0,
+              rect.minX.isFinite, rect.minY.isFinite,
+              rect.maxX.isFinite, rect.maxY.isFinite else {
             return nil
         }
 
@@ -588,36 +594,20 @@ class MobileInkCanvasView: MTKView {
     }
 
     private func selectionBoundsContain(_ location: CGPoint, engine: OpaquePointer, padding: CGFloat) -> Bool {
-        guard getSelectionCount(engine) > 0 else {
+        guard let selectionRect = selectionBoundsInView(engine: engine) else {
             return false
         }
-
-        var bounds: [Float] = [0, 0, 0, 0]
-        getSelectionBounds(engine, &bounds)
-        let selectionRect = CGRect(
-            x: CGFloat(bounds[0]) / scaleX - padding,
-            y: CGFloat(bounds[1]) / scaleY - padding,
-            width: CGFloat(bounds[2] - bounds[0]) / scaleX + padding * 2,
-            height: CGFloat(bounds[3] - bounds[1]) / scaleY + padding * 2
-        )
-
-        return selectionRect.contains(location)
+        return selectionRect.insetBy(dx: -padding, dy: -padding).contains(location)
     }
 
     private func selectionHandleHitTest(_ location: CGPoint, engine: OpaquePointer) -> Int32? {
-        guard getSelectionCount(engine) > 0 else {
+        guard let selectionRect = selectionBoundsInView(engine: engine) else {
             return nil
         }
-
-        var bounds: [Float] = [0, 0, 0, 0]
-        getSelectionBounds(engine, &bounds)
-        let minX = CGFloat(bounds[0]) / scaleX
-        let minY = CGFloat(bounds[1]) / scaleY
-        let maxX = CGFloat(bounds[2]) / scaleX
-        let maxY = CGFloat(bounds[3]) / scaleY
-        guard maxX > minX, maxY > minY else {
-            return nil
-        }
+        let minX = selectionRect.minX
+        let minY = selectionRect.minY
+        let maxX = selectionRect.maxX
+        let maxY = selectionRect.maxY
 
         let centerX = (minX + maxX) * 0.5
         let centerY = (minY + maxY) * 0.5
@@ -737,18 +727,7 @@ class MobileInkCanvasView: MTKView {
             cancelHoldToShapePreview()
             isHoldToShapeStrokeActive = false
             // Check if we're tapping inside an existing selection
-            let hasExistingSelection = getSelectionCount(engine) > 0
-            var tappedInsideSelection = false
-
-            if hasExistingSelection {
-                var bounds: [Float] = [0, 0, 0, 0]
-                getSelectionBounds(engine, &bounds)
-                let selectionRect = CGRect(x: CGFloat(bounds[0]) / scaleX,
-                                          y: CGFloat(bounds[1]) / scaleY,
-                                          width: CGFloat(bounds[2] - bounds[0]) / scaleX,
-                                          height: CGFloat(bounds[3] - bounds[1]) / scaleY)
-                tappedInsideSelection = selectionRect.contains(location)
-            }
+            let tappedInsideSelection = selectionBoundsInView(engine: engine)?.contains(location) ?? false
 
             if tappedInsideSelection {
                 // Start moving the existing selection
@@ -1519,14 +1498,12 @@ class MobileInkCanvasView: MTKView {
         guard let engine = drawingEngine else { return }
         let count = Int(getSelectionCount(engine))
         var payload: [String: Any] = ["count": count]
-        if count > 0 {
-            var bounds: [Float] = [0, 0, 0, 0]
-            getSelectionBounds(engine, &bounds)
+        if count > 0, let selectionRect = selectionBoundsInView(engine: engine) {
             payload["bounds"] = [
-                "x": CGFloat(bounds[0]) / scaleX,
-                "y": CGFloat(bounds[1]) / scaleY,
-                "width": CGFloat(bounds[2] - bounds[0]) / scaleX,
-                "height": CGFloat(bounds[3] - bounds[1]) / scaleY,
+                "x": selectionRect.minX,
+                "y": selectionRect.minY,
+                "width": selectionRect.width,
+                "height": selectionRect.height,
             ]
         } else {
             payload["bounds"] = NSNull()

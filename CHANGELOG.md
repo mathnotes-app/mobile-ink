@@ -2,6 +2,11 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [0.3.6] - 2026-10-02
+
+- iOS: selection hit-testing, the selection toolbar and `onInkSelectionChange` now share one bounds helper that rejects non-finite geometry; the event sends `null` bounds instead of NaN. The selection toolbar ignores selection bounds that are not finite. Inverted or overflowing bounds previously produced a NaN frame and terminated the app with `CALayerInvalidGeometry` (seen in production after a pooled page was cleared with a live selection, which 0.3.5 also fixes at the source).
+- The podspec now reads its version from `package.json`, so the CocoaPods version and source tag always match the published package.
+
 ## [0.3.5] - 2026-10-02
 
 - Fixed a crash when deleting a selection after Undo, Redo or Clear. The selection kept stroke indices from before the history change, and deleting it underflowed a `size_t` and aborted the app with an uncaught `std::length_error`.
