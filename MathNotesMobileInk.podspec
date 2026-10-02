@@ -1,6 +1,10 @@
+require "json"
+
+package = JSON.parse(File.read(File.join(__dir__, "package.json")))
+
 Pod::Spec.new do |s|
   s.name         = "MathNotesMobileInk"
-  s.version      = "0.3.2"
+  s.version      = package["version"]
   s.summary      = "Native Skia/Metal mobile ink engine for React Native"
   s.homepage     = "https://github.com/mathnotes-app/mobile-ink"
   s.license      = { :type => "Apache-2.0", :file => "LICENSE" }
