@@ -144,6 +144,18 @@ void SkiaDrawingEngine::clearSelection() {
     }
 }
 
+void SkiaDrawingEngine::resetIndexedSelectionState() {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+
+    // Transform state is owned by cancelSelectionTransform(), which callers
+    // run before rebuilding strokes_ so its originals restore into place.
+    // clearSelection() is not reused: drag snapshots must be freed even
+    // when the selection is already empty.
+    selectedIndices_.clear();
+    pendingDeleteIndices_.clear();
+    endSelectionDrag();
+}
+
 void SkiaDrawingEngine::deleteSelection() {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
 

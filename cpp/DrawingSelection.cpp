@@ -128,7 +128,7 @@ void DrawingSelection::deleteSelection(
     size_t newIndex = 0;
 
     std::vector<Stroke> remainingStrokes;
-    remainingStrokes.reserve(strokes.size() - selectedIndices.size());
+    remainingStrokes.reserve(strokes.size() - delta.removedStrokes.size());
 
     for (size_t i = 0; i < strokes.size(); i++) {
         if (selectedIndices.count(i) == 0) {
@@ -154,7 +154,7 @@ void DrawingSelection::deleteSelection(
     strokes = remainingStrokes;
     selectedIndices.clear();
 
-    if (commit) commit(std::move(delta));
+    if (commit && !delta.removedStrokes.empty()) commit(std::move(delta));
 }
 
 void DrawingSelection::copySelection(

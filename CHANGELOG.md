@@ -2,9 +2,13 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
-## [Unreleased]
+## [0.3.5] - 2026-10-02
 
+- Fixed a crash when deleting a selection after Undo, Redo or Clear. The selection kept stroke indices from before the history change, and deleting it underflowed a `size_t` and aborted the app with an uncaught `std::length_error`.
+- Fixed Delete or Move after Undo acting on strokes the user never selected. Undo, Redo, Clear and loading now drop index-based selection, object-eraser and transform state, and cancel an in-flight selection transform before reverting.
+- iOS hides the selection toolbar after Undo, Redo and Clear, so it no longer offers actions on strokes that are gone.
 - Added unit tests for `normalizePagePayloadForNativeLoad` covering blank, malformed, and valid native-load payloads (#12).
+- Added `npm run test:native:selection-smoke` regression coverage, run in CI.
 
 
 ## [0.3.4] - 2026-08-15

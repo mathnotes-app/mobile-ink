@@ -137,6 +137,10 @@ private:
     void commitDelta(StrokeDelta&& delta);
     void applyDelta(const StrokeDelta& delta);   // forward (used by redo)
     void revertDelta(const StrokeDelta& delta);  // backward (used by undo)
+    // Selection and object-eraser state store positions into strokes_. Call
+    // whenever strokes_ is rebuilt or compacted (undo/redo/clear/load/object
+    // erase) so no stale index can address a different or missing stroke.
+    void resetIndexedSelectionState();
 
     // Pixel-eraser accumulator. During an eraser drag (touchBegan eraser
     // -> touchMoved... -> touchEnded), applyPixelEraserAt only collects

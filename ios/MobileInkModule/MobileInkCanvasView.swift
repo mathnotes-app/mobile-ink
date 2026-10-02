@@ -995,23 +995,44 @@ class MobileInkCanvasView: MTKView {
 
     @objc func clear() {
         guard let engine = drawingEngine else { return }
+        let hadSelection = getSelectionCount(engine) > 0
         clearCanvas(engine)
+        endSelectionInteractionAfterHistoryChange(hadSelection: hadSelection)
         requestDisplay()
         onDrawingChange?([:])
     }
 
     @objc func undo() {
         guard let engine = drawingEngine else { return }
+        let hadSelection = getSelectionCount(engine) > 0
         undoStroke(engine)
+        endSelectionInteractionAfterHistoryChange(hadSelection: hadSelection)
         requestDisplay()
         onDrawingChange?([:])
     }
 
     @objc func redo() {
         guard let engine = drawingEngine else { return }
+        let hadSelection = getSelectionCount(engine) > 0
         redoStroke(engine)
+        endSelectionInteractionAfterHistoryChange(hadSelection: hadSelection)
         requestDisplay()
         onDrawingChange?([:])
+    }
+
+    /// Undo, redo and clear rebuild the stroke list, so the engine drops its
+    /// selection. Mirror that here: stop any in-flight move/transform and hide
+    /// the selection toolbar so it cannot act on strokes that are gone.
+    /// An in-progress lasso is kept: it selects against the new strokes on
+    /// pen-up.
+    private func endSelectionInteractionAfterHistoryChange(hadSelection: Bool) {
+        isMovingSelection = false
+        isTransformingSelection = false
+        selectionTransformHandleIndex = -1
+        hasSelectionMoveDelta = false
+        if hadSelection {
+            notifySelectionChange()
+        }
     }
 
     // MARK: - Eraser Cursor
