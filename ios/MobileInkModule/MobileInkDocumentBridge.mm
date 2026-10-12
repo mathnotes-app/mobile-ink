@@ -73,6 +73,9 @@ NSString* encodePage(const ContinuousDocumentPage& page, bool includeOrder) {
 
 @interface MobileInkDocumentBridge : NSObject <RCTBridgeModule>
 @end
+// Skia archives can supply exception RTTI that prevents std::exception matching.
+// Keep catch-all rejection at every exported C++ boundary; never let an invalid
+// notebook unwind through React Native or resolve it as an empty document.
 @implementation MobileInkDocumentBridge
 RCT_EXPORT_MODULE()
 @synthesize bridge = _bridge;
@@ -91,6 +94,8 @@ RCT_EXPORT_METHOD(composeDocument:(NSArray<NSString*>*)payloads
         resolve(encodePage(document, false));
     } catch (const std::exception& error) {
         reject(@"DOCUMENT_COMPOSE_FAILED", [NSString stringWithUTF8String:error.what()], nil);
+    } catch (...) {
+        reject(@"DOCUMENT_COMPOSE_FAILED", @"Unable to process drawing data", nil);
     }
 }
 // Compose off the UI thread, then reuse the canvas's confirmed asynchronous load.
@@ -127,6 +132,8 @@ RCT_EXPORT_METHOD(loadDocument:(nonnull NSNumber*)viewTag
         });
     } catch (const std::exception& error) {
         reject(@"DOCUMENT_LOAD_FAILED", [NSString stringWithUTF8String:error.what()], nil);
+    } catch (...) {
+        reject(@"DOCUMENT_LOAD_FAILED", @"Unable to process drawing data", nil);
     }
 }
 RCT_EXPORT_METHOD(partitionDocument:(NSString*)payload
@@ -143,6 +150,8 @@ RCT_EXPORT_METHOD(partitionDocument:(NSString*)payload
         resolve(result);
     } catch (const std::exception& error) {
         reject(@"DOCUMENT_PARTITION_FAILED", [NSString stringWithUTF8String:error.what()], nil);
+    } catch (...) {
+        reject(@"DOCUMENT_PARTITION_FAILED", @"Unable to process drawing data", nil);
     }
 }
 RCT_EXPORT_METHOD(projectDocumentPages:(NSArray<NSString*>*)payloads
@@ -171,6 +180,8 @@ RCT_EXPORT_METHOD(projectDocumentPages:(NSArray<NSString*>*)payloads
         resolve(result);
     } catch (const std::exception& error) {
         reject(@"DOCUMENT_EXPORT_FAILED", [NSString stringWithUTF8String:error.what()], nil);
+    } catch (...) {
+        reject(@"DOCUMENT_EXPORT_FAILED", @"Unable to process drawing data", nil);
     }
 }
 @end
