@@ -31,8 +31,12 @@ export interface TouchExclusionRect {
 export interface ZoomableInkViewportProps {
   children: ReactNode;
   style?: ViewStyle;
+  /** Identifies the actual gesture surface, excluding sibling toolbars. */
+  testID?: string;
   minScale?: number;
   maxScale?: number;
+  /** Mount-time zoom, clamped to the zoom limits. Reset still returns to 1x. */
+  initialScale?: number;
   enabled?: boolean;
   onZoomChange?: (scale: number) => void;
   /** Called when gesture state changes - use to block canvas touches */

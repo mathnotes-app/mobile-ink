@@ -5,7 +5,7 @@ import type { NotebookPage } from "../types";
 import { getContinuousEnginePoolRange } from "../utils/continuousEnginePool";
 import { styles } from "./styles";
 
-const PDF_BACKGROUND_WINDOW_SIZE = 7;
+const BACKGROUND_WINDOW_SIZE = 7;
 
 export type PageBackgroundsProps = {
   pages: NotebookPage[];
@@ -26,14 +26,9 @@ export const PageBackgrounds = memo(function PageBackgrounds({
   showPageLabels,
   visiblePageIndex,
 }: PageBackgroundsProps) {
-  const shouldWindowPdfBackgrounds = backgroundType === "pdf";
-  const renderRange = shouldWindowPdfBackgrounds
-    ? getContinuousEnginePoolRange(
-        visiblePageIndex,
-        pages.length,
-        PDF_BACKGROUND_WINDOW_SIZE,
-      )
-    : { startIndex: 0, endIndex: pages.length - 1 };
+  const renderRange = getContinuousEnginePoolRange(
+    visiblePageIndex, pages.length, BACKGROUND_WINDOW_SIZE,
+  );
   const renderedPages = [];
 
   for (
@@ -49,6 +44,7 @@ export const PageBackgrounds = memo(function PageBackgrounds({
 
   return (
     <>
+      <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: '#FFFFFF' }]} />
       {renderedPages.map(({ page, pageIndex }) => {
         const pdfBackgroundUri = backgroundType === "pdf" && pdfBackgroundBaseUri
           ? `${pdfBackgroundBaseUri}#page=${page.pdfPageNumber || pageIndex + 1}`
@@ -67,11 +63,13 @@ export const PageBackgrounds = memo(function PageBackgrounds({
               },
             ]}
           >
-            <NativeInkPageBackground
-              style={StyleSheet.absoluteFillObject}
-              backgroundType={backgroundType}
-              pdfBackgroundUri={pdfBackgroundUri}
-            />
+            {backgroundType !== 'plain' && (
+              <NativeInkPageBackground
+                style={StyleSheet.absoluteFillObject}
+                backgroundType={backgroundType}
+                pdfBackgroundUri={pdfBackgroundUri}
+              />
+            )}
             {showPageLabels ? (
               <Text style={styles.pageLabel}>{pageIndex + 1}</Text>
             ) : null}
@@ -96,6 +94,8 @@ export const PageBreaks = memo(function PageBreaks({
       {pages.slice(1).map((page, pageIndex) => (
         <View
           key={`mobile-ink-page-break-${page.id}`}
+          testID={`ink-page-boundary-${pageIndex + 1}`}
+          collapsable={false}
           pointerEvents="none"
           style={[
             styles.pageBreak,

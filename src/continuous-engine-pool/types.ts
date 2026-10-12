@@ -100,7 +100,7 @@ export type ContinuousEnginePoolProps = {
     pageId: string,
     data: string,
     previewUri?: string,
-  ) => void;
+  ) => void | Promise<void>;
 };
 
 export type PooledCanvasSlotAssignOptions = {
@@ -113,6 +113,7 @@ export type PooledCanvasSlotAssignOptions = {
 
 export type PooledCanvasSlotHandle = {
   assign: (options: PooledCanvasSlotAssignOptions) => Promise<void>;
+  getLoadedPageId: () => string | null;
   applyToolState: (toolState: ContinuousEnginePoolToolState) => void;
   startBenchmarkRecording: (options?: NativeInkBenchmarkRecordingOptions) => Promise<boolean>;
   stopBenchmarkRecording: () => Promise<NativeInkBenchmarkResult | null>;
@@ -157,7 +158,7 @@ export type PooledCanvasSlotProps = {
     pageId: string,
     data: string,
     previewUri?: string,
-  ) => void;
+  ) => void | Promise<void>;
 };
 
 export type NativeCanvasRef = NativeInkCanvasRef;

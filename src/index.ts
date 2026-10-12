@@ -4,6 +4,7 @@ export {
   composeContinuousWindow,
   decomposeContinuousWindow,
   readBodyFileParsed,
+  parseNotebookData,
 } from "./NativeInkCanvas";
 export type {
   NativeInkCanvasProps,
@@ -34,6 +35,7 @@ export type {
   ContinuousEnginePoolToolState,
 } from "./ContinuousEnginePool";
 
+export { ContinuousDocumentCanvas, type ContinuousDocumentCanvasRef, type ContinuousDocumentCanvasProps } from "./infinite-ink-canvas/ContinuousDocumentCanvas";
 export { InfiniteInkCanvas } from "./InfiniteInkCanvas";
 export type {
   InfiniteInkCanvasProps,
@@ -86,3 +88,7 @@ export type {
   TextBox,
   ToolType,
 } from "./types";
+
+export { composeDocument, partitionDocument, projectDocumentPages } from "./native-ink-canvas/documentBridge";
+
+export { getDocumentRenderViewport } from "./utils/documentViewport";

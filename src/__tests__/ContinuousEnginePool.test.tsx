@@ -162,6 +162,23 @@ describe("ContinuousEnginePool", () => {
     global.requestAnimationFrame = originalRequestAnimationFrame;
   });
 
+  it("waits for the engine's first layout before reporting its page loaded", async () => {
+    const slots = new Map<string, ContinuousEnginePoolSlotRef>();
+    const onAssignmentReady = jest.fn();
+    mockLoadBase64Data.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+    const { poolRef } = renderPool({
+      onAssignmentReady,
+      registerPerPageSlot: (pageId, slot) => {
+        if (slot) slots.set(pageId, slot);
+        else slots.delete(pageId);
+      },
+    });
+    await assignPages(poolRef, buildAssignments([page(0)], 0));
+    expect(mockLoadBase64Data).toHaveBeenCalledTimes(3);
+    expect(slots.get("page-0")?.isLoaded()).toBe(true);
+    expect(onAssignmentReady).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps three native canvases mounted and reassigns without release", async () => {
     const pages = [page(0), page(1), page(2), page(3)];
     const onSlotCaptureBeforeUnmount = jest.fn();
@@ -348,7 +365,8 @@ describe("ContinuousEnginePool", () => {
     const [firstSlotProps] = mockNativeCanvasProps.slice(-3);
     expect(firstSlotProps).toEqual(expect.objectContaining({
       renderScale: 2,
-      renderViewportLeftRatio: 100 / 600,
+      // A 600pt page is centered at x=-100 inside the 400pt viewport.
+      renderViewportLeftRatio: 200 / 600,
       renderViewportTopRatio: 100 / 800,
       renderViewportWidthRatio: 200 / 600,
       renderViewportHeightRatio: 200 / 800,
@@ -408,6 +426,80 @@ describe("ContinuousEnginePool", () => {
       backend: "cpu",
     });
     expect(mockStopBenchmarkRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves native read errors instead of manufacturing a blank page", async () => {
+    const slots = new Map<string, ContinuousEnginePoolSlotRef>();
+    const { poolRef } = renderPool({ registerPerPageSlot: (id, slot) => { if (slot) slots.set(id, slot); } });
+    await act(async () => {});
+    await assignPages(poolRef, buildAssignments([page(0)], 0));
+    const failure = new Error("native read failed");
+    mockGetBase64Data.mockRejectedValueOnce(failure);
+    await expect(slots.get("page-0")!.getBase64Data()).rejects.toBe(failure);
+    mockGetBase64Data.mockResolvedValueOnce('{"pages":{}}');
+    await expect(slots.get("page-0")!.getBase64Data()).resolves.toBe('{"pages":{}}');
+    mockGetBase64Data.mockResolvedValueOnce('');
+    await expect(slots.get("page-0")!.getBase64Data()).rejects.toThrow('no payload');
+  });
+
+  it("rejects a serialization result when its native slot was reassigned during the read", async () => {
+    const slots = new Map<string, ContinuousEnginePoolSlotRef>();
+    const { poolRef } = renderPool({ registerPerPageSlot: (id, slot) => { if (slot) slots.set(id, slot); } });
+    await act(async () => {});
+    await assignPages(poolRef, buildAssignments([page(0)], 0));
+    let finishRead!: (value: string) => void;
+    mockGetBase64Data.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+    const pendingRead = slots.get("page-0")!.getBase64Data();
+    const rejected = expect(pendingRead).rejects.toThrow('assignment changed');
+    await assignPages(poolRef, buildAssignments([page(1)], 1));
+    finishRead('{"pages":{"0":"old-page-data"}}');
+    await rejected;
+  });
+
+  it.each(['read rejection', 'empty payload', 'commit rejection'])(
+    "preserves dirty ink and retries after %s during recycling", async failureMode => {
+      const slots = new Map<string, ContinuousEnginePoolSlotRef>();
+      const ready = jest.fn();
+      const capture = jest.fn(async () => undefined);
+      const { poolRef, view } = renderPool({
+        onAssignmentReady: ready,
+        shouldCaptureBeforeReassign: () => true,
+        onSlotCaptureBeforeUnmount: capture,
+        registerPerPageSlot: (id, slot) => { if (slot) slots.set(id, slot); else slots.delete(id); },
+      });
+      await assignPages(poolRef, buildAssignments([page(0)], 0));
+      const originalSlot = slots.get('page-0');
+      if (failureMode === 'read rejection') mockGetBase64Data.mockRejectedValueOnce(new Error('read failed'));
+      if (failureMode === 'empty payload') mockGetBase64Data.mockResolvedValueOnce('');
+      if (failureMode === 'commit rejection') capture.mockRejectedValueOnce(new Error('commit failed'));
+      await act(async () => {
+        await expect(poolRef.current!.assignPages(buildAssignments([page(1)], 1))).rejects.toThrow();
+      });
+      expect(slots.get('page-0')).toBe(originalSlot);
+      expect(originalSlot?.isLoaded()).toBe(true);
+      expect(mockLoadBase64Data).toHaveBeenCalledTimes(1);
+      expect(ready).toHaveBeenCalledTimes(1);
+      const frame = StyleSheet.flatten(view.getByTestId('continuous-engine-pool-slot-0').props.style);
+      expect(frame.top).toBe(0);
+      expect(frame.opacity).toBe(1);
+      await assignPages(poolRef, buildAssignments([page(1)], 1));
+      expect(slots.has('page-0')).toBe(false);
+      expect(slots.get('page-1')?.isLoaded()).toBe(true);
+      expect(ready).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("does not report a failed page load as ready and can retry it", async () => {
+    const ready = jest.fn();
+    const { poolRef } = renderPool({ onAssignmentReady: ready });
+    mockLoadBase64Data.mockRejectedValueOnce(new Error('invalid payload'));
+    await act(async () => {
+      await expect(poolRef.current!.assignPages(buildAssignments([page(0)], 0))).rejects.toThrow('invalid payload');
+    });
+    expect(ready).not.toHaveBeenCalled();
+    await assignPages(poolRef, buildAssignments([page(0)], 0));
+    expect(ready).toHaveBeenCalledTimes(1);
+    expect(mockLoadBase64Data).toHaveBeenCalledTimes(2);
   });
 
   it("starts and stops notebook benchmark recording across the mounted pool", async () => {

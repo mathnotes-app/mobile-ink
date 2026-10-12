@@ -117,7 +117,7 @@ sk_sp<SkImage> makeRedBlueSwappedImage(const sk_sp<SkImage>& image) {
     return surface->makeImageSnapshot();
 }
 
-void renderWithDisplayColorOrdering(SkiaDrawingEngine* engine, SkCanvas* canvas) {
+void renderWithDisplayColorOrdering(SkiaDrawingEngine* engine, SkCanvas* canvas, bool cropped = false) {
     if (!engine || !canvas) {
         return;
     }
@@ -125,7 +125,8 @@ void renderWithDisplayColorOrdering(SkiaDrawingEngine* engine, SkCanvas* canvas)
     SkPaint outputPaint;
     outputPaint.setColorFilter(makeRedBlueSwapFilter());
     canvas->saveLayer(nullptr, &outputPaint);
-    engine->render(canvas);
+    if (cropped) engine->renderVisibleViewport(canvas);
+    else engine->render(canvas);
     canvas->restore();
 }
 
@@ -356,8 +357,9 @@ struct DrawingContext {
     int ganeshSamples = -1;
     int ganeshStencil = -1;
 
-    DrawingContext(int w, int h) {
-        engine = std::make_unique<SkiaDrawingEngine>(w, h);
+    const bool continuousDocument;
+    DrawingContext(int w, int h, bool continuous = false) : continuousDocument(continuous) {
+        engine = std::make_unique<SkiaDrawingEngine>(w, h, continuous);
     }
 
     ~DrawingContext() {
@@ -374,10 +376,17 @@ extern "C" {
 // Engine lifecycle
 JNIEXPORT jlong JNICALL
 Java_com_mathnotes_mobileink_MobileInkCanvasView_createDrawingEngine(
-    JNIEnv* env, jobject obj, jint width, jint height) {
+    JNIEnv* env, jobject obj, jint width, jint height, jboolean continuous) {
 
-    auto* ctx = new DrawingContext(width, height);
+    auto* ctx = new DrawingContext(width, height, continuous == JNI_TRUE);
     return reinterpret_cast<jlong>(ctx);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_mathnotes_mobileink_MobileInkCanvasView_resizeContinuousDrawingEngine(
+    JNIEnv* env, jobject obj, jlong contextPtr, jint width, jint height) {
+    auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
+    return ctx && ctx->engine && ctx->engine->resizeDocument(width, height) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
@@ -461,6 +470,12 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_updateHoldShapePreview(
 }
 
 // Canvas operations
+JNIEXPORT jboolean JNICALL
+Java_com_mathnotes_mobileink_MobileInkCanvasView_clearDocumentPageNative(JNIEnv* env, jobject obj, jlong contextPtr, jint pageIndex, jfloat pageHeight) {
+    auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
+    return ctx && ctx->engine && ctx->engine->clearDocumentPage(pageIndex, pageHeight) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL
 Java_com_mathnotes_mobileink_MobileInkCanvasView_clearCanvas(JNIEnv* env, jobject obj, jlong contextPtr) {
     auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
@@ -469,20 +484,35 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_clearCanvas(JNIEnv* env, jobjec
     }
 }
 
-JNIEXPORT void JNICALL
-Java_com_mathnotes_mobileink_MobileInkCanvasView_undoStroke(JNIEnv* env, jobject obj, jlong contextPtr) {
+JNIEXPORT jboolean JNICALL
+Java_com_mathnotes_mobileink_MobileInkCanvasView_recordExternalEditNative(
+    JNIEnv* env, jobject, jlong contextPtr, jstring before, jstring after) {
     auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
-    if (ctx && ctx->engine) {
-        ctx->engine->undo();
-    }
+    if (!ctx || !ctx->engine || !before || !after) return JNI_FALSE;
+    const char* beforeBytes = env->GetStringUTFChars(before, nullptr);
+    if (!beforeBytes) return JNI_FALSE;
+    const char* afterBytes = env->GetStringUTFChars(after, nullptr);
+    if (!afterBytes) { env->ReleaseStringUTFChars(before, beforeBytes); return JNI_FALSE; }
+    bool result = ctx->engine->commitExternalEdit(beforeBytes, afterBytes);
+    env->ReleaseStringUTFChars(before, beforeBytes);
+    env->ReleaseStringUTFChars(after, afterBytes);
+    return result ? JNI_TRUE : JNI_FALSE;
 }
 
-JNIEXPORT void JNICALL
-Java_com_mathnotes_mobileink_MobileInkCanvasView_redoStroke(JNIEnv* env, jobject obj, jlong contextPtr) {
+JNIEXPORT jstring JNICALL
+Java_com_mathnotes_mobileink_MobileInkCanvasView_undoStroke(JNIEnv* env, jobject, jlong contextPtr) {
     auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
-    if (ctx && ctx->engine) {
-        ctx->engine->redo();
-    }
+    if (!ctx || !ctx->engine) return nullptr;
+    const auto payload = ctx->engine->undo();
+    return payload.empty() ? nullptr : env->NewStringUTF(payload.c_str());
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_mathnotes_mobileink_MobileInkCanvasView_redoStroke(JNIEnv* env, jobject, jlong contextPtr) {
+    auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
+    if (!ctx || !ctx->engine) return nullptr;
+    const auto payload = ctx->engine->redo();
+    return payload.empty() ? nullptr : env->NewStringUTF(payload.c_str());
 }
 
 // Tool settings
@@ -883,7 +913,7 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_renderGaneshToCurrentSurface(
     }
 
     SkCanvas* canvas = ctx->ganeshSurface->getCanvas();
-    renderWithDisplayColorOrdering(ctx->engine.get(), canvas);
+    renderWithDisplayColorOrdering(ctx->engine.get(), canvas, ctx->continuousDocument);
     ctx->ganeshContext->flushAndSubmit(ctx->ganeshSurface.get());
     return JNI_TRUE;
 }

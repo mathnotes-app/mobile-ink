@@ -62,6 +62,8 @@ export type InfiniteInkCanvasProps = {
    */
   overlay?: ReactNode;
   onReady?: () => void;
+  /** A page could not be safely saved/reassigned. Dirty ink remains in its slot. */
+  onError?: (error: Error) => void;
   onDrawingChange?: (pageId: string) => void;
   onSelectionChange?: (
     pageId: string,

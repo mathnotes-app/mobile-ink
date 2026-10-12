@@ -4,8 +4,6 @@ import { GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
-  withTiming,
-  cancelAnimation,
 } from 'react-native-reanimated';
 import type {
   TouchExclusionRect,
@@ -15,6 +13,7 @@ import type {
 import {
   shouldLockHorizontalTranslation as shouldLockHorizontalTranslationForLayout,
 } from './zoomable-ink-viewport/geometry';
+import { useViewportTransition } from './zoomable-ink-viewport/useViewportTransition';
 import { useZoomableViewportGestures } from './zoomable-ink-viewport/useZoomableViewportGestures';
 
 export type {
@@ -38,8 +37,10 @@ const ZoomableInkViewport = forwardRef<ZoomableInkViewportRef, ZoomableInkViewpo
     const {
       children,
       style,
+      testID = 'ink-viewport',
       minScale = 1,
       maxScale = 5,
+      initialScale = 1,
       enabled = true,
       onZoomChange,
       onGestureStateChange,
@@ -92,12 +93,14 @@ const ZoomableInkViewport = forwardRef<ZoomableInkViewportRef, ZoomableInkViewpo
     }, [lockHorizontalPanNearFit, lockHorizontalPanNearFitValue]);
 
     // Transform state
-    const scale = useSharedValue(1);
+    const startingScale = Math.min(maxScale, Math.max(minScale,
+      Number.isFinite(initialScale) ? initialScale : 1));
+    const scale = useSharedValue(startingScale);
     const translateX = useSharedValue(0);
     const translateY = useSharedValue(0);
 
     // Saved state for gesture continuity
-    const savedScale = useSharedValue(1);
+    const savedScale = useSharedValue(startingScale);
     const savedTranslateX = useSharedValue(0);
     const savedTranslateY = useSharedValue(0);
 
@@ -205,29 +208,18 @@ const ZoomableInkViewport = forwardRef<ZoomableInkViewportRef, ZoomableInkViewpo
       lastTransformNotificationTs,
     });
 
-    const resetZoom = useCallback(() => {
-      cancelAnimation(scale);
-      cancelAnimation(translateX);
-      cancelAnimation(translateY);
-      scale.value = 1;
-      translateX.value = 0;
-      translateY.value = 0;
-      savedScale.value = 1;
-      savedTranslateX.value = 0;
-      savedTranslateY.value = 0;
-    }, [scale, translateX, translateY, savedScale, savedTranslateX, savedTranslateY]);
+    const applyTransition = useViewportTransition({
+      scale, translateX, translateY, savedScale, savedTranslateX, savedTranslateY,
+      containerWidth, containerHeight, isGesturingRef, isDecayingX, isDecayingY,
+      isClampingX, isClampingY, isMotionActive,
+    }, onMotionStateChange, onTransformChange);
 
+    const resetZoom = useCallback(() => {
+      applyTransition({ scale: 1, translateX: 0, translateY: 0 }, false);
+    }, [applyTransition]);
     const resetZoomAnimated = useCallback(() => {
-      cancelAnimation(scale);
-      cancelAnimation(translateX);
-      cancelAnimation(translateY);
-      scale.value = withTiming(1, { duration: 150 });
-      translateX.value = withTiming(0, { duration: 150 });
-      translateY.value = withTiming(0, { duration: 150 });
-      savedScale.value = 1;
-      savedTranslateX.value = 0;
-      savedTranslateY.value = 0;
-    }, [scale, translateX, translateY, savedScale, savedTranslateX, savedTranslateY]);
+      applyTransition({ scale: 1, translateX: 0, translateY: 0 }, true);
+    }, [applyTransition]);
 
     const contentFrameStyle = useMemo(() => ({
       height: Math.max(0, contentHeight + contentPadding * 2),
@@ -250,9 +242,6 @@ const ZoomableInkViewport = forwardRef<ZoomableInkViewportRef, ZoomableInkViewpo
         containerHeight: containerHeight.value,
       }),
       setTransform: ({ scale: nextScale, translateX: nextTranslateX, translateY: nextTranslateY, animated = false }) => {
-        cancelAnimation(scale);
-        cancelAnimation(translateX);
-        cancelAnimation(translateY);
         const resolvedScale = nextScale ?? scale.value;
         const shouldLockResolvedX = shouldLockHorizontalTranslationForLayout(
           resolvedScale,
@@ -267,21 +256,11 @@ const ZoomableInkViewport = forwardRef<ZoomableInkViewportRef, ZoomableInkViewpo
             : nextTranslateX ?? translateX.value;
         const resolvedTranslateY = nextTranslateY ?? translateY.value;
 
-        if (animated) {
-          scale.value = withTiming(resolvedScale, { duration: 150 });
-          translateX.value = withTiming(resolvedTranslateX, { duration: 150 });
-          translateY.value = withTiming(resolvedTranslateY, { duration: 150 });
-        } else {
-          scale.value = resolvedScale;
-          translateX.value = resolvedTranslateX;
-          translateY.value = resolvedTranslateY;
-        }
-
-        savedScale.value = resolvedScale;
-        savedTranslateX.value = resolvedTranslateX;
-        savedTranslateY.value = resolvedTranslateY;
+        applyTransition({
+          scale: resolvedScale, translateX: resolvedTranslateX, translateY: resolvedTranslateY,
+        }, animated);
       },
-    }), [resetZoom, resetZoomAnimated, isZoomed, scale, translateX, translateY, containerWidth, containerHeight, savedScale, savedTranslateX, savedTranslateY, lockHorizontalPanNearFit, isLandscape, contentWidth]);
+    }), [resetZoom, resetZoomAnimated, isZoomed, scale, translateX, translateY, containerWidth, containerHeight, savedScale, savedTranslateX, savedTranslateY, lockHorizontalPanNearFit, isLandscape, contentWidth, applyTransition]);
 
     const animatedStyle = useAnimatedStyle(() => {
       return {
@@ -301,7 +280,7 @@ const ZoomableInkViewport = forwardRef<ZoomableInkViewportRef, ZoomableInkViewpo
     // When disabled, render without gesture handling
     if (!enabled) {
       return (
-        <View style={[styles.container, style]} onLayout={handleLayout}>
+        <View testID={testID} style={[styles.container, style]} onLayout={handleLayout}>
           <View style={contentFrameStyle}>
             {children}
           </View>
@@ -313,7 +292,7 @@ const ZoomableInkViewport = forwardRef<ZoomableInkViewportRef, ZoomableInkViewpo
     // inner view. Pinch focal coordinates are then measured in stable viewport
     // coordinates instead of a view whose own transform is changing every frame.
     return (
-      <View ref={viewportRef} style={[styles.clipContainer, style]} collapsable={false}>
+      <View testID={testID} ref={viewportRef} style={[styles.clipContainer, style]} collapsable={false}>
         <GestureDetector gesture={composedGesture}>
           <View style={styles.container} onLayout={handleLayout}>
             <Animated.View

@@ -1,3 +1,4 @@
+import { trimIfNeeded } from './trimIfNeeded';
 import type { NotebookPage } from "../types";
 
 export const BLANK_PAGE_PAYLOAD = '{"pages":{}}';
@@ -12,11 +13,11 @@ export const createBlankPage = (pageIndex: number): NotebookPage => ({
 });
 
 export const isBlankPagePayload = (data?: string) => {
-  if (!data || data.trim().length === 0) {
+  if (!data || trimIfNeeded(data).length === 0) {
     return true;
   }
 
-  return data.trim() === BLANK_PAGE_PAYLOAD;
+  return trimIfNeeded(data) === BLANK_PAGE_PAYLOAD;
 };
 
 export const pageHasPdfBackground = (page: NotebookPage) => (

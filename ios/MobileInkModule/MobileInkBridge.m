@@ -35,6 +35,10 @@ RCT_EXTERN_METHOD(readBodyFileParsed:(NSString *)bodyPath
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(parseNotebookData:(NSString *)data
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 // Full-notebook native autosave: read existing body, replace ONLY the
 // visible window's per-page data with the engine's current state, write
 // atomically. Body bytes never cross the bridge. JS sends just visible

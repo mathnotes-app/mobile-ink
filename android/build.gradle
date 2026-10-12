@@ -53,6 +53,7 @@ android {
     }
 
     defaultConfig {
+        consumerProguardFiles "consumer-rules.pro"
         minSdkVersion safeExtGet("minSdkVersion", 24)
         targetSdkVersion safeExtGet("targetSdkVersion", 35)
 

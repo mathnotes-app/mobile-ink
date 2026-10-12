@@ -156,6 +156,55 @@ void objectEraseDropsLiveSelection() {
   check(strokeAt(engine, 400.0f), "delete after object erase never removes an unselected stroke");
 }
 
+void externalEditsShareInkHistory() {
+  SkiaDrawingEngine engine(820, 1061);
+  drawStroke(engine, 200.0f);
+  const auto firstInk = engine.serializeDrawing();
+  engine.selectStrokeAt(150.0f, 200.0f);
+  engine.beginSelectionTransform(0);
+  check(!engine.commitExternalEdit("before selection", "after selection"), "cannot commit an overlay during an ink transform");
+  engine.cancelSelectionTransform();
+  engine.clearSelection();
+  check(engine.commitExternalEdit("before image", "after image"), "records an asset edit");
+  check(engine.serializeDrawing() == firstInk, "recording overlay history does not change persisted ink");
+  drawStroke(engine, 400.0f);
+  const auto bothInk = engine.serializeDrawing();
+  check(engine.undo().empty(), "latest ink undoes before earlier asset");
+  check(engine.serializeDrawing() == firstInk, "ink undo preserves first stroke");
+  check(engine.undo() == "before image", "next undo returns exact asset before patch");
+  check(engine.serializeDrawing() == firstInk, "asset undo leaves ink unchanged");
+  check(engine.redo() == "after image", "redo returns exact asset after patch");
+  check(engine.redo().empty(), "ink redoes after asset");
+  check(engine.serializeDrawing() == bothInk, "combined redo restores original ink bytes");
+  engine.undo();
+  check(engine.commitExternalEdit("before next", "after next"), "new asset edit after ink undo");
+  check(!engine.canRedo(), "new asset edit discards ink redo branch");
+  check(engine.undo() == "before next", "new asset edit is next undo");
+  check(engine.undo() == "before image", "earlier asset history survives branch edit");
+  check(engine.deserializeDrawing(bothInk), "reload accepts ink bytes");
+  check(!engine.canUndo() && !engine.canRedo(), "reload clears session-only overlay history");
+}
+
+void externalHistoryIsBoundedAndRejectsInvalidCommits() {
+  SkiaDrawingEngine engine(820, 1061);
+  check(!engine.commitExternalEdit("", "after"), "empty external patch rejected");
+  check(!engine.commitExternalEdit("same", "same"), "unchanged external patch rejected");
+  engine.touchBegan(100, 100, 1);
+  check(!engine.commitExternalEdit("before", "after"), "cannot interleave an external edit inside an unfinished stroke");
+  engine.touchEnded();
+  for (int i = 0; i < 25; ++i) {
+    check(engine.commitExternalEdit("before" + std::to_string(i), "after" + std::to_string(i)), "records bounded external history");
+  }
+  for (int i = 24; i >= 5; --i) {
+    check(engine.undo() == "before" + std::to_string(i), "external undo order matches native bounded stack");
+  }
+  check(!engine.canUndo(), "external entries obey native20 entry cap");
+  for (int i = 5; i <= 24; ++i) {
+    check(engine.redo() == "after" + std::to_string(i), "external redo order matches native bounded stack");
+  }
+  check(!engine.canRedo(), "redo stack exhausted exactly once");
+}
+
 }  // namespace
 
 int main() {
@@ -165,6 +214,8 @@ int main() {
   undoCancelsInFlightTransform();
   undoDropsPendingObjectErase();
   objectEraseDropsLiveSelection();
+  externalEditsShareInkHistory();
+  externalHistoryIsBoundedAndRejectsInvalidCommits();
 
   if (g_failures == 0) {
     std::cout << "Selection history smoke tests passed" << std::endl;

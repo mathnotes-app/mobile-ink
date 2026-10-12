@@ -83,7 +83,7 @@ bool deserializeDrawingBytes(
     return serializer.deserialize(buffer, strokes);
 }
 
-void renderWithCpuColorOrdering(nativedrawing::SkiaDrawingEngine* engine, SkCanvas* canvas) {
+void renderWithCpuColorOrdering(nativedrawing::SkiaDrawingEngine* engine, SkCanvas* canvas, bool cropped) {
     float redBlueSwapMatrix[20] = {
         0, 0, 1, 0, 0,
         0, 1, 0, 0, 0,
@@ -94,7 +94,8 @@ void renderWithCpuColorOrdering(nativedrawing::SkiaDrawingEngine* engine, SkCanv
     SkPaint outputPaint;
     outputPaint.setColorFilter(SkColorFilters::Matrix(redBlueSwapMatrix));
     canvas->saveLayer(nullptr, &outputPaint);
-    engine->render(canvas);
+    if (cropped) engine->renderVisibleViewport(canvas);
+    else engine->render(canvas);
     canvas->restore();
 }
 
@@ -227,6 +228,14 @@ void* createDrawingEngine(int width, int height) {
     return new SkiaDrawingEngine(width, height);
 }
 
+void* createContinuousDrawingEngine(int width, int height) {
+    return new SkiaDrawingEngine(width, height, true);
+}
+
+bool resizeContinuousDrawingEngine(void* engine, int width, int height) {
+    return engine && static_cast<SkiaDrawingEngine*>(engine)->resizeDocument(width, height);
+}
+
 void destroyDrawingEngine(void* engine) {
     if (engine) {
         delete static_cast<SkiaDrawingEngine*>(engine);
@@ -272,10 +281,31 @@ void addPredictedPoint(void* engine, float x, float y, float pressure, float azi
     }
 }
 
+bool clearContinuousDocumentPage(void* engine, int pageIndex, float pageHeight) {
+    return engine && static_cast<SkiaDrawingEngine*>(engine)->clearDocumentPage(pageIndex, pageHeight);
+}
+
 void clearCanvas(void* engine) {
     if (engine) {
         static_cast<SkiaDrawingEngine*>(engine)->clear();
     }
+}
+
+bool commitExternalEdit(void* engine, const char* before, const char* after) {
+    return engine && before && after &&
+        static_cast<SkiaDrawingEngine*>(engine)->commitExternalEdit(before, after);
+}
+
+char* undoExternalEdit(void* engine) {
+    if (!engine) return nullptr;
+    const auto payload = static_cast<SkiaDrawingEngine*>(engine)->undo();
+    return payload.empty() ? nullptr : strdup(payload.c_str());
+}
+
+char* redoExternalEdit(void* engine) {
+    if (!engine) return nullptr;
+    const auto payload = static_cast<SkiaDrawingEngine*>(engine)->redo();
+    return payload.empty() ? nullptr : strdup(payload.c_str());
 }
 
 void undoStroke(void* engine) {
@@ -353,6 +383,14 @@ void renderToCanvas(void* engine, void* canvas) {
     }
 }
 
+void renderVisibleViewportToCanvas(void* engine, void* canvas) {
+    if (engine && canvas) static_cast<SkiaDrawingEngine*>(engine)->renderVisibleViewport(static_cast<SkCanvas*>(canvas));
+}
+
+void renderToCanvasForExport(void* engine, void* canvas) {
+    if (engine && canvas) static_cast<SkiaDrawingEngine*>(engine)->renderForExport(static_cast<SkCanvas*>(canvas));
+}
+
 void setRenderViewport(
     void* engine,
     float renderScale,
@@ -405,7 +443,7 @@ void destroyGaneshMetalContext(void* contextPtr) {
     delete contextHandle;
 }
 
-bool renderToGaneshMetalTexture(void* engine, void* contextPtr, void* texturePtr, int width, int height) {
+bool renderToGaneshMetalTexture(void* engine, void* contextPtr, void* texturePtr, int width, int height, bool cropped) {
     if (!engine || !contextPtr || !texturePtr || width <= 0 || height <= 0) {
         return false;
     }
@@ -439,7 +477,7 @@ bool renderToGaneshMetalTexture(void* engine, void* contextPtr, void* texturePtr
 
     SkCanvas* canvas = surface->getCanvas();
     canvas->clear(SK_ColorTRANSPARENT);
-    renderWithCpuColorOrdering(static_cast<SkiaDrawingEngine*>(engine), canvas);
+    renderWithCpuColorOrdering(static_cast<SkiaDrawingEngine*>(engine), canvas, cropped);
     directContext->flushAndSubmit(surface.get());
     return true;
 }

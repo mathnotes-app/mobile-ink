@@ -9,7 +9,7 @@ import type { NativeSelectionBounds } from "../types";
 
 export interface NativeInkCanvasProps {
   style?: ViewStyle;
-  onDrawingChange?: () => void;
+  onDrawingChange?: (event?: NativeSyntheticEvent<{ historyAction?: "undo" | "redo"; externalEdit?: { payload: string } }>) => void;
   onDrawingBegin?: (event: NativeSyntheticEvent<{ x: number; y: number }>) => void;
   onSelectionChange?: (event: { nativeEvent: { count: number; bounds?: NativeSelectionBounds | null } }) => void;
   onCanvasReady?: () => void;
@@ -20,6 +20,8 @@ export interface NativeInkCanvasProps {
   renderBackend?: NativeInkRenderBackend;
   /** Native raster scale bucket used to keep ink sharp after zoom settles. */
   renderScale?: number;
+  /** Continuous document mode; fixed for the lifetime of this canvas. */
+  continuousDocument?: boolean;
   /** Visible page rect, expressed as normalized page-space ratios. */
   renderViewportLeftRatio?: number;
   renderViewportTopRatio?: number;
@@ -34,11 +36,16 @@ export interface NativeInkCanvasProps {
 export interface NativeInkCanvasRef {
   setNativeProps?: (nativeProps: Record<string, unknown>) => void;
   clear: () => void;
+  /** Continuous document only; pageHeight is in native drawing coordinates. */
+  clearDocumentPage: (pageIndex: number, pageHeight: number) => void;
+  /** Records an opaque overlay patch in the same bounded history as ink. */
+  recordExternalEdit: (before: string, after: string) => Promise<boolean>;
   undo: () => void;
   redo: () => void;
   setTool: (toolType: string, width: number, color: string, eraserMode?: string) => void;
   getBase64Data: () => Promise<string>;
   loadBase64Data: (base64String: string) => Promise<boolean>;
+  loadDocument: (pagePayloads: string[], pageHeight: number) => Promise<boolean>;
   /**
    * Eagerly release the heavy native state (~13 MB pixel buffer + the
    * C++ drawing engine + queued JS callbacks) without waiting for ARC.

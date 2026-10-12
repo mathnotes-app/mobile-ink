@@ -90,7 +90,7 @@ std::vector<Stroke> SkiaDrawingEngine::splitStrokeAtPoint(
 }
 
 void SkiaDrawingEngine::bakeEraserCircles() {
-    if (eraserCircles_.size() <= bakedCircleCount_) return;  // Nothing new to bake
+    if (!strokeSurface_ || eraserCircles_.size() <= bakedCircleCount_) return;  // Nothing new to bake
 
     // Apply kClear directly to strokeSurface_ using smooth stroke paths
     SkCanvas* canvas = strokeSurface_->getCanvas();

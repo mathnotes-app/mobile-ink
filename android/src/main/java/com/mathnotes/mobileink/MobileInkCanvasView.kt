@@ -1,6 +1,8 @@
 package com.mathnotes.mobileink
 
 import android.content.Context
+import android.graphics.Matrix
+import android.graphics.RectF
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.opengl.EGL14
@@ -72,6 +74,38 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     // When "pencilonly", only stylus touches are processed for drawing
     var drawingPolicy: String = "default"
     var renderBackend: String = "ganesh"
+    var continuousDocument: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            queueEvent {
+                if (drawingEngine != 0L) configureDrawingEngine(engineWidth, engineHeight, true)
+            }
+            if (value) refreshContinuousTexture()
+            else surfaceTexture?.let { if (isAvailable) configureAvailableTexture(it, width, height) }
+        }
+    private val effectiveRenderScale: Float
+        get() = floatArrayOf(1f, 1.5f, 2f, 2.5f, 3f, 4f, 5f).minByOrNull { kotlin.math.abs(it - renderScale) } ?: 1f
+
+    private fun continuousViewport(w: Int = width, h: Int = height): RectF {
+        val left = renderViewportLeftRatio * w
+        val top = renderViewportTopRatio * h
+        val maxSide = 4096f / effectiveRenderScale
+        return RectF(left, top,
+            left + maxOf(1f, minOf(w - left, renderViewportWidthRatio * w, maxSide)),
+            top + maxOf(1f, minOf(h - top, renderViewportHeightRatio * h, maxSide)))
+    }
+
+    private var continuousTextureUpdatePending = false
+    private fun refreshContinuousTexture() {
+        if (!continuousDocument || continuousTextureUpdatePending) return
+        continuousTextureUpdatePending = true
+        post {
+            continuousTextureUpdatePending = false
+            surfaceTexture?.let { if (isAvailable) configureAvailableTexture(it, width, height) }
+        }
+    }
+
     var renderScale: Float = 1f
         set(value) {
             val clamped = value.takeIf { it.isFinite() }?.coerceIn(1f, 5f) ?: 1f
@@ -88,24 +122,28 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     var renderViewportLeftRatio: Float = 0f
         set(value) {
             field = value.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f
+            refreshContinuousTexture()
             applyRenderViewport()
             requestInkRender(force = true)
         }
     var renderViewportTopRatio: Float = 0f
         set(value) {
             field = value.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f
+            refreshContinuousTexture()
             applyRenderViewport()
             requestInkRender(force = true)
         }
     var renderViewportWidthRatio: Float = 1f
         set(value) {
             field = value.takeIf { it.isFinite() }?.coerceIn(0.001f, 1f) ?: 1f
+            refreshContinuousTexture()
             applyRenderViewport()
             requestInkRender(force = true)
         }
     var renderViewportHeightRatio: Float = 1f
         set(value) {
             field = value.takeIf { it.isFinite() }?.coerceIn(0.001f, 1f) ?: 1f
+            refreshContinuousTexture()
             applyRenderViewport()
             requestInkRender(force = true)
         }
@@ -159,8 +197,16 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
             return
         }
 
-        val targetWidth = maxOf(1, kotlin.math.ceil(width * renderScale).toInt())
-        val targetHeight = maxOf(1, kotlin.math.ceil(height * renderScale).toInt())
+        val visible = if (continuousDocument) continuousViewport(width, height)
+            else RectF(0f, 0f, width.toFloat(), height.toFloat())
+        val transform = Matrix()
+        if (continuousDocument) {
+            transform.setScale(visible.width() / width, visible.height() / height)
+            transform.postTranslate(visible.left, visible.top)
+        }
+        setTransform(transform)
+        val targetWidth = maxOf(1, kotlin.math.ceil(visible.width() * effectiveRenderScale).toInt())
+        val targetHeight = maxOf(1, kotlin.math.ceil(visible.height() * effectiveRenderScale).toInt())
         surfaceTexture.setDefaultBufferSize(targetWidth, targetHeight)
         queueEvent {
             if (
@@ -200,7 +246,13 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
 
         val shouldPreserveDrawing = drawingEngine != 0L
         if (drawingEngine == 0L || engineWidth != width || engineHeight != height) {
-            configureDrawingEngine(width, height, shouldPreserveDrawing)
+            if (continuousDocument && drawingEngine != 0L && resizeContinuousDrawingEngine(drawingEngine, width, height)) {
+                engineWidth = width
+                engineHeight = height
+                applyRenderViewport()
+            } else {
+                configureDrawingEngine(width, height, shouldPreserveDrawing)
+            }
         } else {
             applyRenderViewport()
         }
@@ -375,7 +427,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
             drawingEngine = 0
         }
 
-        drawingEngine = createDrawingEngine(width, height)
+        drawingEngine = createDrawingEngine(width, height, continuousDocument)
         engineWidth = width
         engineHeight = height
 
@@ -409,10 +461,10 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         }
     }
 
-    private fun applyRenderViewport() {
+    private fun applyRenderViewport() = queueEvent {
         val engine = drawingEngine
         if (engine == 0L || engineWidth <= 0 || engineHeight <= 0) {
-            return
+            return@queueEvent
         }
 
         val left = renderViewportLeftRatio.coerceIn(0f, 1f) * engineWidth
@@ -426,19 +478,18 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
             renderViewportHeightRatio.coerceIn(0.001f, 1f) * engineHeight
         )
 
-        val actualRenderScale = if (renderWidth > 0 && engineWidth > 0) {
+        val actualRenderScale = if (continuousDocument) effectiveRenderScale else if (renderWidth > 0 && engineWidth > 0) {
             (renderWidth.toFloat() / engineWidth.toFloat()).coerceIn(1f, 5f)
         } else {
             renderScale.coerceIn(1f, 5f)
         }
 
+        val continuous = if (continuousDocument) continuousViewport(engineWidth, engineHeight) else null
         setRenderViewport(
-            engine,
-            actualRenderScale,
-            left,
-            top,
-            maxOf(1f, viewportWidth),
-            maxOf(1f, viewportHeight)
+            engine, actualRenderScale,
+            continuous?.left ?: left, continuous?.top ?: top,
+            continuous?.width() ?: maxOf(1f, viewportWidth),
+            continuous?.height() ?: maxOf(1f, viewportHeight)
         )
     }
 
@@ -1004,6 +1055,18 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         return true
     }
 
+    fun clearDocumentPage(pageIndex: Int, pageHeight: Float) {
+        val success = runOnGlThreadSync {
+            drawingEngine != 0L && clearDocumentPageNative(drawingEngine, pageIndex, pageHeight)
+        } ?: false
+        if (success) {
+            resetTransientInteractionState()
+            requestInkRender()
+            emitSelectionChange()
+            sendEvent("onDrawingChange", Arguments.createMap())
+        }
+    }
+
     fun clear() {
         clearCanvasForLoad()
         sendEvent("onDrawingChange", Arguments.createMap())
@@ -1038,27 +1101,32 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         requestInkRender()
     }
 
-    fun undo() {
+    fun recordExternalEdit(before: String, after: String): Boolean = runOnGlThreadSync {
+        drawingEngine != 0L && recordExternalEditNative(drawingEngine, before, after)
+    } ?: false
+
+    private fun applyHistory(redo: Boolean) {
         queueEvent {
             if (drawingEngine != 0L) {
-                undoStroke(drawingEngine)
-                post { emitSelectionChange() }
+                val payload = if (redo) redoStroke(drawingEngine) else undoStroke(drawingEngine)
+                post {
+                    emitSelectionChange()
+                    val event = Arguments.createMap()
+                    event.putString("historyAction", if (redo) "redo" else "undo")
+                    if (payload != null) {
+                        val external = Arguments.createMap()
+                        external.putString("payload", payload)
+                        event.putMap("externalEdit", external)
+                    }
+                    requestInkRender()
+                    sendEvent("onDrawingChange", event)
+                }
             }
         }
-        requestInkRender()
-        sendEvent("onDrawingChange", Arguments.createMap())
     }
 
-    fun redo() {
-        queueEvent {
-            if (drawingEngine != 0L) {
-                redoStroke(drawingEngine)
-                post { emitSelectionChange() }
-            }
-        }
-        requestInkRender()
-        sendEvent("onDrawingChange", Arguments.createMap())
-    }
+    fun undo() = applyHistory(false)
+    fun redo() = applyHistory(true)
 
     fun setTool(toolType: String, width: Float, color: Int) {
         cancelHoldToShapePreview()
@@ -1349,7 +1417,8 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     }
 
     // Native method declarations
-    private external fun createDrawingEngine(width: Int, height: Int): Long
+    private external fun createDrawingEngine(width: Int, height: Int, continuous: Boolean): Long
+    private external fun resizeContinuousDrawingEngine(engine: Long, width: Int, height: Int): Boolean
     private external fun destroyDrawingEngine(engine: Long)
     private external fun setRenderViewport(engine: Long, renderScale: Float, visibleLeft: Float, visibleTop: Float, visibleWidth: Float, visibleHeight: Float)
 
@@ -1360,9 +1429,11 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     private external fun updateHoldShapePreview(engine: Long, timestamp: Long): Boolean
 
     // Canvas operations
+    private external fun clearDocumentPageNative(engine: Long, pageIndex: Int, pageHeight: Float): Boolean
     private external fun clearCanvas(engine: Long)
-    private external fun undoStroke(engine: Long)
-    private external fun redoStroke(engine: Long)
+    private external fun recordExternalEditNative(engine: Long, before: String, after: String): Boolean
+    private external fun undoStroke(engine: Long): String?
+    private external fun redoStroke(engine: Long): String?
 
     // Tool settings
     private external fun setStrokeColor(engine: Long, color: Int)

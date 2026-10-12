@@ -65,6 +65,11 @@ class MobileInkCanvasViewManager(private val reactContext: ReactApplicationConte
         view.renderBackend = backend ?: "ganesh"
     }
 
+    @ReactProp(name = "continuousDocument")
+    fun setContinuousDocument(view: MobileInkCanvasView, enabled: Boolean) {
+        view.continuousDocument = enabled
+    }
+
     @ReactProp(name = "renderScale")
     fun setRenderScale(view: MobileInkCanvasView, scale: Float) {
         view.renderScale = scale
@@ -112,6 +117,9 @@ class MobileInkCanvasViewManager(private val reactContext: ReactApplicationConte
     ) {
         when (commandId) {
             "clear" -> root.clear()
+            "clearDocumentPage" -> {
+                if (args != null && args.size() == 2) root.clearDocumentPage(args.getInt(0), args.getDouble(1).toFloat())
+            }
             "undo" -> root.undo()
             "redo" -> root.redo()
             "setTool" -> {

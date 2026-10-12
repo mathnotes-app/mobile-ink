@@ -2,6 +2,15 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [0.3.8] - 2026-10-12
+
+- Added continuous document drawing across page boundaries, preserving stroke order, eraser targets, undo/redo, and page-local save/export data.
+- Added external edit history for host-owned text and image changes so their undo/redo remains chronological with ink.
+- Render visible zoom regions at the required scale and release obsolete render surfaces; avoid retaining old notebooks in native gesture callbacks.
+- Correct tap coordinates in centered zoomed viewports and confirm native loads before marking pages ready.
+- Added native parsing of the exact selected notebook payload so recovery does not reread a stale local file.
+- Ordinary multi-page notebooks no longer acquire inferred PDF page numbers during loading.
+
 ## [0.3.7] - 2026-10-02
 
 - Added `capturePreviewOnReassign` to `ContinuousEnginePool` (default `true`). Hosts that don't use page previews can set it to `false` to skip the native render and PNG encode that runs for every captured page when the pool shifts. Page data is still captured.

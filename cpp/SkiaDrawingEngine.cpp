@@ -57,21 +57,20 @@ float limitWidthDelta(float previousWidth, float nextWidth, float baseWidth) {
 
 }  // namespace
 
-SkiaDrawingEngine::SkiaDrawingEngine(int width, int height)
-    : width_(width)
+SkiaDrawingEngine::SkiaDrawingEngine(int width, int height, bool viewportOnly)
+    : viewportOnly_(viewportOnly)
+    , width_(width)
     , height_(height)
     , currentTool_("pen")
     , eraserMode_("pixel")
     , needsStrokeRedraw_(true)
     , visibleWidth_(static_cast<float>(width))
     , visibleHeight_(static_cast<float>(height))
-    , needsEraserMaskRedraw_(true)
     , hasLastSmoothedPoint_(false)
     , eraserCursorX_(0)
     , eraserCursorY_(0)
     , eraserCursorRadius_(0)
     , showEraserCursor_(false)
-    , cachedEraserCircleCount_(0)
     , bakedCircleCount_(0)
     , maxAffectedStrokeIndex_(0)
     , backgroundType_("plain")
@@ -82,7 +81,7 @@ SkiaDrawingEngine::SkiaDrawingEngine(int width, int height)
     , eraserRenderer_(std::make_unique<EraserRenderer>())
     , strokeSplitter_(std::make_unique<StrokeSplitter>(pathRenderer_.get()))
     , batchExporter_(std::make_unique<BatchExporter>(width, height))
-    , activeStrokeRenderer_(std::make_unique<ActiveStrokeRenderer>(width, height, pathRenderer_.get())) {
+    , activeStrokeRenderer_(std::make_unique<ActiveStrokeRenderer>(width, height, pathRenderer_.get(), viewportOnly)) {
 
     // Initialize paint with high-quality settings
     currentPaint_.setAntiAlias(true);
@@ -95,17 +94,11 @@ SkiaDrawingEngine::SkiaDrawingEngine(int width, int height)
 
     // Create offscreen surface for strokes only (transparent background)
     SkImageInfo info = SkImageInfo::MakeN32Premul(width, height);
-    strokeSurface_ = SkSurfaces::Raster(info);
+    if (!viewportOnly_) strokeSurface_ = SkSurfaces::Raster(info);
 
     if (strokeSurface_) {
         strokeSurface_->getCanvas()->clear(SK_ColorTRANSPARENT);
         cachedStrokeSnapshot_ = strokeSurface_->makeImageSnapshot();  // Initial empty snapshot
-    }
-
-    // Create eraser mask surface (full RGBA for proper DstIn compositing)
-    eraserMaskSurface_ = SkSurfaces::Raster(info);
-    if (eraserMaskSurface_) {
-        eraserMaskSurface_->getCanvas()->clear(SK_ColorWHITE);
     }
 
     // History starts empty -- canUndo/canRedo are derived from the
@@ -709,45 +702,58 @@ void SkiaDrawingEngine::clear() {
     eraserCursorY_ = 0.0f;
 
     markStrokeCachesDirty();
-    needsEraserMaskRedraw_ = true;
 }
 
-void SkiaDrawingEngine::undo() {
+bool SkiaDrawingEngine::commitExternalEdit(const std::string& before, const std::string& after) {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+    if (before.empty() || after.empty() || before == after || !currentPoints_.empty() ||
+        isDraggingSelection_ || isTransformingSelection_) return false;
+    StrokeDelta delta;
+    delta.kind = StrokeDelta::Kind::ExternalEdit;
+    delta.externalBefore = before;
+    delta.externalAfter = after;
+    commitDelta(std::move(delta));
+    return true;
+}
 
-    if (undoStack_.empty()) return;
+std::string SkiaDrawingEngine::undo() {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+    if (undoStack_.empty()) return {};
     cancelSelectionTransform();
     StrokeDelta delta = std::move(undoStack_.back());
     undoStack_.pop_back();
+    const bool external = delta.kind == StrokeDelta::Kind::ExternalEdit;
+    std::string patch = external ? delta.externalBefore : std::string();
     revertDelta(delta);
     redoStack_.push_back(std::move(delta));
-    resetIndexedSelectionState();
-
-    cachedEraserCircleCount_ = 0;
-    bakedCircleCount_ = 0;
-    clearActiveShapePreview();
-    activeStrokeRenderer_->reset();
-    markStrokeCachesDirty();
-    needsEraserMaskRedraw_ = true;
+    if (!external) {
+        resetIndexedSelectionState();
+        bakedCircleCount_ = 0;
+        clearActiveShapePreview();
+        activeStrokeRenderer_->reset();
+        markStrokeCachesDirty();
+    }
+    return patch;
 }
 
-void SkiaDrawingEngine::redo() {
+std::string SkiaDrawingEngine::redo() {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
-
-    if (redoStack_.empty()) return;
+    if (redoStack_.empty()) return {};
     cancelSelectionTransform();
     StrokeDelta delta = std::move(redoStack_.back());
     redoStack_.pop_back();
+    const bool external = delta.kind == StrokeDelta::Kind::ExternalEdit;
+    std::string patch = external ? delta.externalAfter : std::string();
     applyDelta(delta);
     undoStack_.push_back(std::move(delta));
-    resetIndexedSelectionState();
-
-    cachedEraserCircleCount_ = 0;
-    bakedCircleCount_ = 0;
-    clearActiveShapePreview();
-    activeStrokeRenderer_->reset();
-    markStrokeCachesDirty();
-    needsEraserMaskRedraw_ = true;
+    if (!external) {
+        resetIndexedSelectionState();
+        bakedCircleCount_ = 0;
+        clearActiveShapePreview();
+        activeStrokeRenderer_->reset();
+        markStrokeCachesDirty();
+    }
+    return patch;
 }
 
 void SkiaDrawingEngine::setStrokeColor(SkColor color) {
@@ -871,7 +877,6 @@ bool SkiaDrawingEngine::deserializeDrawing(const std::vector<uint8_t>& data) {
     undoStack_.clear();
     redoStack_.clear();
     markStrokeCachesDirty();
-    needsEraserMaskRedraw_ = true;
     return true;
 }
 

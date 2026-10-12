@@ -163,3 +163,16 @@ export async function decomposeContinuousWindow(
 
   return MobileInkBridge.decomposeContinuousWindow(windowPayload, pageCount, pageHeight);
 }
+
+/** Parse the caller-selected notebook, never a potentially older file on disk.
+ * Null means the native parser is unavailable; malformed input rejects. */
+export async function parseNotebookData(data: string): Promise<Record<string, unknown> | null> {
+  const native = Platform.OS === "ios" ? MobileInkBridge
+    : Platform.OS === "android" ? MobileInkModule : undefined;
+  if (!native?.parseNotebookData) return null;
+  const result = await native.parseNotebookData(data);
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new Error("Native notebook parser returned an invalid root");
+  }
+  return result as Record<string, unknown>;
+}

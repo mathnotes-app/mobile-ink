@@ -6,19 +6,13 @@
 
 namespace nativedrawing {
 
-ActiveStrokeRenderer::ActiveStrokeRenderer(int width, int height, PathRenderer* pathRenderer)
+ActiveStrokeRenderer::ActiveStrokeRenderer(int width, int height, PathRenderer* pathRenderer, bool viewportOnly)
     : pathRenderer_(pathRenderer)
+    , viewportOnly_(viewportOnly)
     , logicalWidth_(width)
     , logicalHeight_(height)
     , lastRenderedInputIndex_(0)
-    , hasLastEdge_(false) {
-
-    SkImageInfo info = SkImageInfo::MakeN32Premul(width, height);
-    activeStrokeSurface_ = SkSurfaces::Raster(info);
-    if (activeStrokeSurface_) {
-        activeStrokeSurface_->getCanvas()->clear(SK_ColorTRANSPARENT);
-    }
-}
+    , hasLastEdge_(false) {}
 
 void ActiveStrokeRenderer::resetIncrementalState() {
     cachedActiveSnapshot_ = nullptr;
@@ -30,10 +24,12 @@ void ActiveStrokeRenderer::resetIncrementalState() {
 }
 
 void ActiveStrokeRenderer::reset() {
+    // Release the snapshot before clearing its backing surface. Otherwise
+    // Skia copies the full page to preserve an image we're about to discard.
+    resetIncrementalState();
     if (activeStrokeSurface_) {
         activeStrokeSurface_->getCanvas()->clear(SK_ColorTRANSPARENT);
     }
-    resetIncrementalState();
 }
 
 void ActiveStrokeRenderer::ensureViewportAlignment(const ActiveStrokeViewport& viewport) {
@@ -52,17 +48,25 @@ void ActiveStrokeRenderer::ensureViewportAlignment(const ActiveStrokeViewport& v
     const float viewHeight = viewport.height > 0.0f
         ? viewport.height
         : static_cast<float>(logicalHeight_);
+    // Continuous documents keep a screen-sized preview even at identity zoom.
+    // A 4096px cap bounds the cache to 64 MiB independently of page count.
+    const int nextWidth = viewportOnly_
+        ? std::min(4096, std::max(1, static_cast<int>(std::ceil(viewWidth * requestedScale))))
+        : logicalWidth_;
+    const int nextHeight = viewportOnly_
+        ? std::min(4096, std::max(1, static_cast<int>(std::ceil(viewHeight * requestedScale))))
+        : logicalHeight_;
     const float fitScale = std::min(
-        static_cast<float>(logicalWidth_) / std::max(1.0f, viewWidth),
-        static_cast<float>(logicalHeight_) / std::max(1.0f, viewHeight)
+        static_cast<float>(nextWidth) / std::max(1.0f, viewWidth),
+        static_cast<float>(nextHeight) / std::max(1.0f, viewHeight)
     );
     const float nextScale = std::max(kMinimumRenderScale, std::min(requestedScale, fitScale));
 
     float nextOriginX = 0.0f;
     float nextOriginY = 0.0f;
-    if (nextScale > kIdentityRenderScaleThreshold) {
-        const float coveredWidth = static_cast<float>(logicalWidth_) / nextScale;
-        const float coveredHeight = static_cast<float>(logicalHeight_) / nextScale;
+    if (viewportOnly_ || nextScale > kIdentityRenderScaleThreshold) {
+        const float coveredWidth = std::min(static_cast<float>(logicalWidth_), static_cast<float>(nextWidth) / nextScale);
+        const float coveredHeight = std::min(static_cast<float>(logicalHeight_), static_cast<float>(nextHeight) / nextScale);
         nextOriginX = std::clamp(
             viewport.left, 0.0f, static_cast<float>(logicalWidth_) - coveredWidth);
         nextOriginY = std::clamp(
@@ -70,6 +74,7 @@ void ActiveStrokeRenderer::ensureViewportAlignment(const ActiveStrokeViewport& v
     }
 
     if (activeStrokeSurface_
+        && nextWidth == surfaceWidth_ && nextHeight == surfaceHeight_
         && std::fabs(nextScale - viewportScale_) < 0.01f
         && std::fabs(nextOriginX - viewportOriginX_) < 0.5f
         && std::fabs(nextOriginY - viewportOriginY_) < 0.5f) {
@@ -80,16 +85,20 @@ void ActiveStrokeRenderer::ensureViewportAlignment(const ActiveStrokeViewport& v
     viewportOriginX_ = nextOriginX;
     viewportOriginY_ = nextOriginY;
 
-    if (!activeStrokeSurface_) {
-        SkImageInfo info = SkImageInfo::MakeN32Premul(logicalWidth_, logicalHeight_);
+    // Anchoring changed mid-stroke: discard incremental progress so the
+    // next render draws every point into the newly aligned surface.
+    resetIncrementalState();
+    // Reading/scrolling a page does not need an active-stroke bitmap. Allocate
+    // on the first stroke and retain it for subsequent strokes on this engine.
+    if (!activeStrokeSurface_ || nextWidth != surfaceWidth_ || nextHeight != surfaceHeight_) {
+        surfaceWidth_ = nextWidth;
+        surfaceHeight_ = nextHeight;
+        SkImageInfo info = SkImageInfo::MakeN32Premul(surfaceWidth_, surfaceHeight_);
         activeStrokeSurface_ = SkSurfaces::Raster(info);
     }
     if (activeStrokeSurface_) {
         activeStrokeSurface_->getCanvas()->clear(SK_ColorTRANSPARENT);
     }
-    // Anchoring changed mid-stroke: drop incremental progress so the next
-    // renderIncremental call re-renders every point into the fresh surface.
-    resetIncrementalState();
 }
 
 void ActiveStrokeRenderer::applySurfaceTransform(SkCanvas* surfaceCanvas) const {
@@ -263,15 +272,15 @@ void ActiveStrokeRenderer::drawSnapshot(SkCanvas* canvas) const {
     }
 
     if (viewportScale_ <= kIdentityRenderScaleThreshold) {
-        canvas->drawImage(cachedActiveSnapshot_, 0, 0);
+        canvas->drawImage(cachedActiveSnapshot_, viewportOriginX_, viewportOriginY_);
         return;
     }
 
     const SkRect dst = SkRect::MakeXYWH(
         viewportOriginX_,
         viewportOriginY_,
-        static_cast<float>(logicalWidth_) / viewportScale_,
-        static_cast<float>(logicalHeight_) / viewportScale_
+        static_cast<float>(surfaceWidth_) / viewportScale_,
+        static_cast<float>(surfaceHeight_) / viewportScale_
     );
     canvas->drawImageRect(
         cachedActiveSnapshot_,

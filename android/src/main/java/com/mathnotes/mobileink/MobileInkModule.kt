@@ -101,6 +101,17 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    fun recordExternalEdit(viewTag: Int, before: String, after: String, promise: Promise) {
+        reactContext.runOnUiQueueThread {
+            try {
+                promise.resolve(findDrawingView(viewTag)?.recordExternalEdit(before, after) ?: false)
+            } catch (error: Exception) {
+                promise.reject("EXTERNAL_HISTORY", "Could not record overlay history", error)
+            }
+        }
+    }
+
+    @ReactMethod
     fun getBase64Data(viewTag: Int, promise: Promise) {
         reactContext.runOnUiQueueThread {
             try {
@@ -494,6 +505,17 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
             } catch (e: Exception) {
                 android.util.Log.e("MobileInkModule", "batchExportPages: exception", e)
                 promise.reject("BATCH_EXPORT_ERROR", e.message, e)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun parseNotebookData(data: String, promise: Promise) {
+        executor.execute {
+            try {
+                promise.resolve(jsonObjectToWritableMap(JSONObject(data)))
+            } catch (e: Exception) {
+                promise.reject("PARSE_FAILED", e.message ?: "Notebook parse failed", e)
             }
         }
     }

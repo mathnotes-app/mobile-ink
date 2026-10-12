@@ -1,3 +1,4 @@
+import { trimIfNeeded } from './trimIfNeeded';
 import { NotebookPage, SerializedNotebookData, TextBox } from '../types';
 import { computeDataSignature } from './dataSignature';
 
@@ -67,13 +68,9 @@ export const buildNotebookFromParsed = (
   data: SerializedNotebookData | null | undefined,
 ): DeserializedNotebookData => {
   if (data && data.version === "1.0" && Array.isArray(data.pages)) {
-    // Migration: If pages don't have pdfPageNumber but there are multiple pages,
-    // assume it's a PDF and assign sequential page numbers
-    const pages = data.pages.map((page, index) => {
+    // Only an actual PDF source establishes PDF backing; multiple pages do not.
+    const pages = data.pages.map((page) => {
       let next = page;
-      if (page.pdfPageNumber === undefined && data.pages.length > 1) {
-        next = { ...next, pdfPageNumber: index + 1 };
-      }
       // Seed dataSignature so the preview cache can compare across the
       // session even after the page's data is evicted to disk.
       if (!next.dataSignature && next.data) {
@@ -111,7 +108,7 @@ export const reconcilePdfNotebookPageCount = (
   detectedPageCount: number,
 ): PdfNotebookReconciliationResult => {
   const safePageCount = Math.max(1, Math.floor(detectedPageCount) || 1);
-  const trimmedNotebookData = existingNotebookData?.trim() ?? '';
+  const trimmedNotebookData = trimIfNeeded(existingNotebookData);
 
   if (!trimmedNotebookData) {
     const pages = createBlankPdfPages(0, safePageCount);

@@ -108,3 +108,14 @@ export const shouldLockHorizontalTranslation = (
     )
   );
 };
+
+/** Invert the centered transform used by ZoomableInkViewport for all touch routing. */
+export function viewportPointToContent(x: number, y: number, scale: number,
+  translateX: number, translateY: number, width: number, height: number) {
+  'worklet';
+  const safeScale = scale > 0 ? scale : 1;
+  const originX = width / 2;
+  const originY = height / 2;
+  return {x: (x - originX - translateX) / safeScale + originX,
+    y: (y - originY - translateY) / safeScale + originY};
+}

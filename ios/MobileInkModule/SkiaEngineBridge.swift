@@ -7,6 +7,12 @@ import Foundation
 @_silgen_name("createDrawingEngine")
 func createDrawingEngine(_ width: Int32, _ height: Int32) -> OpaquePointer
 
+@_silgen_name("createContinuousDrawingEngine")
+func createContinuousDrawingEngine(_ width: Int32, _ height: Int32) -> OpaquePointer
+
+@_silgen_name("resizeContinuousDrawingEngine")
+func resizeContinuousDrawingEngine(_ engine: OpaquePointer, _ width: Int32, _ height: Int32) -> Bool
+
 @_silgen_name("destroyDrawingEngine")
 func destroyDrawingEngine(_ engine: OpaquePointer)
 
@@ -31,6 +37,9 @@ func clearPredictedPoints(_ engine: OpaquePointer)
 func addPredictedPoint(_ engine: OpaquePointer, _ x: Float, _ y: Float, _ pressure: Float, _ azimuth: Float, _ altitude: Float, _ timestamp: Int64, _ isPencilInput: Bool)
 
 // MARK: - Canvas Operations
+@_silgen_name("clearContinuousDocumentPage")
+func clearContinuousDocumentPage(_ engine: OpaquePointer, _ pageIndex: Int32, _ pageHeight: Float) -> Bool
+
 @_silgen_name("clearCanvas")
 func clearCanvas(_ engine: OpaquePointer)
 
@@ -70,6 +79,12 @@ func isEmpty(_ engine: OpaquePointer) -> Bool
 @_silgen_name("renderToCanvas")
 func renderToCanvas(_ engine: OpaquePointer, _ canvas: OpaquePointer)
 
+@_silgen_name("renderVisibleViewportToCanvas")
+func renderVisibleViewportToCanvas(_ engine: OpaquePointer, _ canvas: OpaquePointer)
+
+@_silgen_name("renderToCanvasForExport")
+func renderToCanvasForExport(_ engine: OpaquePointer, _ canvas: OpaquePointer)
+
 @_silgen_name("setRenderViewport")
 func setRenderViewport(
   _ engine: OpaquePointer,
@@ -92,7 +107,8 @@ func renderToGaneshMetalTexture(
   _ context: OpaquePointer,
   _ texture: UnsafeMutableRawPointer,
   _ width: Int32,
-  _ height: Int32
+  _ height: Int32,
+  _ cropped: Bool
 ) -> Bool
 
 // MARK: - Skia Canvas Helpers
@@ -205,3 +221,11 @@ func nativeBatchExportPages(
 
 @_silgen_name("freeBatchExportResult")
 func freeBatchExportResult(_ result: UnsafeMutablePointer<CChar>?)
+
+// Returned strings are malloc-owned and must be freed by the caller.
+@_silgen_name("commitExternalEdit")
+func commitExternalEdit(_ engine: OpaquePointer, _ before: UnsafePointer<CChar>, _ after: UnsafePointer<CChar>) -> Bool
+@_silgen_name("undoExternalEdit")
+func undoExternalEdit(_ engine: OpaquePointer) -> UnsafeMutablePointer<CChar>?
+@_silgen_name("redoExternalEdit")
+func redoExternalEdit(_ engine: OpaquePointer) -> UnsafeMutablePointer<CChar>?

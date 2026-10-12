@@ -109,6 +109,7 @@ function InfiniteInkCanvasImpl(
     showPageLabels = true,
     overlay,
     onReady,
+    onError,
     onDrawingChange,
     onSelectionChange,
     onCurrentPageChange,
@@ -175,6 +176,11 @@ function InfiniteInkCanvasImpl(
     return assignments;
   }, []);
 
+  const reportAssignmentFailure = useCallback((error: unknown) => {
+    console.error('[InfiniteInkCanvas] Page assignment failed; retained unsaved ink.', error);
+    onError?.(error instanceof Error ? error : new Error(String(error)));
+  }, [onError]);
+
   const assignEnginesToPage = useCallback(async (pageIndex: number) => {
     await enginePoolRef.current?.assignPages(buildAssignmentsForIndex(pageIndex));
   }, [buildAssignmentsForIndex]);
@@ -205,8 +211,8 @@ function InfiniteInkCanvasImpl(
     const boundedPageIndex = Math.max(0, Math.min(pageCount - 1, pageIndex));
     setVisibleBackgroundPageIndex(boundedPageIndex);
     setCurrentPage(boundedPageIndex);
-    void assignEnginesToPage(boundedPageIndex);
-  }, [assignEnginesToPage, setCurrentPage]);
+    void assignEnginesToPage(boundedPageIndex).catch(reportAssignmentFailure);
+  }, [reportAssignmentFailure, assignEnginesToPage, setCurrentPage]);
 
   const commitLatestViewportPage = useCallback(() => {
     const transform = latestTransformRef.current;
@@ -425,14 +431,14 @@ function InfiniteInkCanvasImpl(
     );
     setCurrentPage(boundedPageIndex);
     setVisibleBackgroundPageIndex(boundedPageIndex);
-    void assignEnginesToPage(boundedPageIndex);
+    void assignEnginesToPage(boundedPageIndex).catch(reportAssignmentFailure);
     viewportRef.current?.setTransform({
       scale: 1,
       translateX: 0,
       translateY: -(boundedPageIndex * pageHeight + contentPadding),
       animated,
     });
-  }, [assignEnginesToPage, contentPadding, pageHeight, setCurrentPage]);
+  }, [reportAssignmentFailure, assignEnginesToPage, contentPadding, pageHeight, setCurrentPage]);
 
   const revealPagePosition = useCallback((pageIndex: number, pageY: number, animated = true) => {
     const boundedPageIndex = Math.max(
@@ -452,7 +458,7 @@ function InfiniteInkCanvasImpl(
     const contentY = contentPadding + boundedPageIndex * pageHeight + boundedPageY;
     setCurrentPage(boundedPageIndex);
     setVisibleBackgroundPageIndex(boundedPageIndex);
-    void assignEnginesToPage(boundedPageIndex);
+    void assignEnginesToPage(boundedPageIndex).catch(reportAssignmentFailure);
     viewportRef.current?.setTransform({
       translateY: getRevealTranslateY(
         contentY,
@@ -462,7 +468,7 @@ function InfiniteInkCanvasImpl(
       ),
       animated,
     });
-  }, [assignEnginesToPage, contentPadding, pageHeight, setCurrentPage]);
+  }, [reportAssignmentFailure, assignEnginesToPage, contentPadding, pageHeight, setCurrentPage]);
 
   const addPage = useCallback(async (options?: { force?: boolean; scroll?: boolean }) => {
     const force = options?.force ?? false;
@@ -481,9 +487,10 @@ function InfiniteInkCanvasImpl(
     const trailingBlankPageIndex = Math.max(0, pagesWithWritableBlank.length - 1);
     setCurrentPage(trailingBlankPageIndex);
     if (shouldScroll) scrollToPage(trailingBlankPageIndex, true);
-    void assignEnginesToPage(trailingBlankPageIndex);
+    void assignEnginesToPage(trailingBlankPageIndex).catch(reportAssignmentFailure);
   }, [
     assignEnginesToPage,
+    reportAssignmentFailure,
     captureDirtyPages,
     replacePages,
     scrollToPage,
@@ -592,6 +599,7 @@ function InfiniteInkCanvasImpl(
   }), [
     addPage,
     assignEnginesToPage,
+    reportAssignmentFailure,
     captureDirtyPages,
     getActiveSlot,
     getCurrentPageSlot,
@@ -605,15 +613,15 @@ function InfiniteInkCanvasImpl(
 
   useEffect(() => {
     if (nativeReadyRef.current) {
-      void assignEnginesToPage(currentPageIndexRef.current);
+      void assignEnginesToPage(currentPageIndexRef.current).catch(reportAssignmentFailure);
     }
-  }, [assignEnginesToPage, pages.length]);
+  }, [reportAssignmentFailure, assignEnginesToPage, pages.length]);
 
   const handleCanvasReady = useCallback(() => {
     nativeReadyRef.current = true;
     onReady?.();
-    void assignEnginesToPage(currentPageIndexRef.current);
-  }, [assignEnginesToPage, onReady]);
+    void assignEnginesToPage(currentPageIndexRef.current).catch(reportAssignmentFailure);
+  }, [reportAssignmentFailure, assignEnginesToPage, onReady]);
 
   return (
     <GestureHandlerRootView style={[styles.root, style]}>

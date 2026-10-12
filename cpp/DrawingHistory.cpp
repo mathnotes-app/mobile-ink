@@ -25,6 +25,8 @@ void applyStrokeDelta(
     PathRenderer& pathRenderer
 ) {
     switch (delta.kind) {
+        case StrokeDelta::Kind::ExternalEdit:
+            break;
         case StrokeDelta::Kind::AddStrokes: {
             for (const auto& stroke : delta.addedStrokes) {
                 strokes.push_back(stroke);
@@ -90,6 +92,8 @@ void revertStrokeDelta(
     PathRenderer& pathRenderer
 ) {
     switch (delta.kind) {
+        case StrokeDelta::Kind::ExternalEdit:
+            break;
         case StrokeDelta::Kind::AddStrokes: {
             for (size_t i = 0; i < delta.addedStrokes.size(); ++i) {
                 if (!strokes.empty()) {
