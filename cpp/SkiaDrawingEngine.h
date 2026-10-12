@@ -36,8 +36,11 @@ class ActiveStrokeRenderer;
 
 class SkiaDrawingEngine {
 public:
-    SkiaDrawingEngine(int width, int height);
+    // viewportOnly is for continuous documents. Set a visible viewport before
+    // rendering; native views must provide a viewport-sized output target.
+    SkiaDrawingEngine(int width, int height, bool viewportOnly = false);
     ~SkiaDrawingEngine();
+    bool resizeDocument(int width, int height);
 
     // Drawing operations (called from touch events)
     void touchBegan(float x, float y, float pressure, float azimuth = 0.0f, float altitude = 1.57f, long timestamp = 0, bool isPencilInput = false);
@@ -51,8 +54,11 @@ public:
 
     // Canvas operations
     void clear();
-    void undo();
-    void redo();
+    bool clearDocumentPage(int pageIndex, float pageHeight);
+    // Returns an opaque overlay patch for external edits, or empty for ink/no-op.
+    std::string undo();
+    std::string redo();
+    bool commitExternalEdit(const std::string& before, const std::string& after);
     void eraseObjects();
 
     // Tool settings
@@ -87,6 +93,8 @@ public:
 
     // Rendering
     void render(SkCanvas* canvas);
+    // Render the configured visible rectangle into a viewport-sized target.
+    void renderVisibleViewport(SkCanvas* canvas);
     void renderForExport(SkCanvas* canvas);
     void setRenderViewport(
         float renderScale,
@@ -155,6 +163,8 @@ private:
     SkPath pendingPixelEraserPath_;
     bool applyPendingPixelEraseToStrokes();
 
+    // Continuous documents render bounded tiles instead of a document-sized bitmap.
+    const bool viewportOnly_;
     int width_;
     int height_;
 
@@ -250,12 +260,6 @@ private:
     float visibleWidth_;
     float visibleHeight_;
 
-    // Eraser mask surface for dual-surface architecture
-    // White = keep stroke, Black = erase stroke
-    // This allows eraser updates without re-rendering all strokes
-    sk_sp<SkSurface> eraserMaskSurface_;
-    bool needsEraserMaskRedraw_;
-
     // Eraser cursor state
     float eraserCursorX_;
     float eraserCursorY_;
@@ -267,10 +271,6 @@ private:
     float lastEraserY_ = 0;
     float lastEraserRadius_ = 0;
     bool hasLastEraserPoint_ = false;
-
-    // OPTIMIZATION: Cached eraser path to avoid rebuilding every frame
-    SkPath cachedEraserPath_;
-    size_t cachedEraserCircleCount_;
 
     // Track how many circles are already baked into strokeSurface_
     // During render: only apply kClear for circles beyond this count (new circles)
@@ -328,9 +328,9 @@ private:
         const SkPath& cachedPath,
         const SkPaint& paint
     );
-    sk_sp<SkImage> renderStrokeTile(const StrokeTileKey& key, int tileWidth, int tileHeight, float scale);
+    const void* strokeTileContext_ = nullptr;
+    sk_sp<SkImage> renderStrokeTile(SkCanvas* targetCanvas, const StrokeTileKey& key, int tileWidth, int tileHeight, float scale);
     void pruneStrokeTileCache();
-    void redrawEraserMask();  // Dual-surface: only redraws eraser circles to mask
 
     // Pixel eraser stroke splitting - splits a stroke by removing portions that intersect the eraser
     std::vector<Stroke> splitStrokeAtPoint(const Stroke& originalStroke, const Point& eraserPoint, float eraserRadius);

@@ -1,4 +1,5 @@
-import { useCallback, useMemo } from "react";
+import { useLayoutEffect, useMemo } from "react";
+import { createViewportCallbacks } from "./viewportCallbacks";
 import { Gesture } from "react-native-gesture-handler";
 import {
   cancelAnimation,
@@ -8,6 +9,7 @@ import {
 } from "react-native-reanimated";
 import type { SharedValue } from "react-native-reanimated";
 import {
+  viewportPointToContent,
   clamp,
   clampTranslation,
   getTranslationBounds,
@@ -105,51 +107,21 @@ export const useZoomableViewportGestures = ({
   isMotionActive,
   lastTransformNotificationTs,
 }: UseZoomableViewportGesturesParams) => {
-  const notifyGestureStart = useCallback(() => {
-    onGestureStateChange?.(true);
-  }, [onGestureStateChange]);
-
-  const notifyGestureEnd = useCallback(() => {
-    onGestureStateChange?.(false);
-  }, [onGestureStateChange]);
-
-  const notifyMotionChange = useCallback((isMoving: boolean) => {
-    onMotionStateChange?.(isMoving);
-  }, [onMotionStateChange]);
-
-  const notifyTransformChange = useCallback((
-    nextScale: number,
-    nextTranslateX: number,
-    nextTranslateY: number,
-    nextContainerWidth: number,
-    nextContainerHeight: number
-  ) => {
-    onTransformChange?.({
-      scale: nextScale,
-      translateX: nextTranslateX,
-      translateY: nextTranslateY,
-      containerWidth: nextContainerWidth,
-      containerHeight: nextContainerHeight,
-    });
-  }, [onTransformChange]);
-
-  const notifyContentTap = useCallback((locationX: number, locationY: number) => {
-    onContentTap?.({
-      nativeEvent: {
-        locationX,
-        locationY,
-        isZoomableContentTap: true,
-      },
-    });
-  }, [onContentTap]);
+  const callbacks = useMemo(createViewportCallbacks, []);
+  useLayoutEffect(() => {
+    callbacks.update({onZoomChange, onGestureStateChange, onMotionStateChange,
+      onTransformChange, onContentTap});
+    return () => callbacks.update(null);
+  }, [callbacks, onZoomChange, onGestureStateChange, onMotionStateChange,
+    onTransformChange, onContentTap]);
+  const {notifyGestureStart, notifyGestureEnd, notifyMotionChange,
+    notifyTransformChange, notifyContentTap, notifyZoomChange} = callbacks;
+  const contentTapEnabled = !!onContentTap;
 
   const isTouchBlocked = (x: number, y: number): boolean => {
     "worklet";
-    const currentScale = scale.value > 0 ? scale.value : 1;
-    const originX = containerWidth.value / 2;
-    const originY = containerHeight.value / 2;
-    const contentX = (x - originX - translateX.value) / currentScale + originX;
-    const contentY = (y - originY - translateY.value) / currentScale + originY;
+    const {x: contentX, y: contentY} = viewportPointToContent(x, y, scale.value,
+      translateX.value, translateY.value, containerWidth.value, containerHeight.value);
 
     for (const rect of blockedRects.value) {
       if (
@@ -388,9 +360,7 @@ export const useZoomableViewportGestures = ({
 
         syncMotionState();
 
-        if (onZoomChange) {
-          runOnJS(onZoomChange)(scale.value);
-        }
+        runOnJS(notifyZoomChange)(scale.value);
       })
       .onFinalize(() => {
         "worklet";
@@ -400,7 +370,7 @@ export const useZoomableViewportGestures = ({
           syncMotionState();
         }
       });
-  }, [enabled, minScale, maxScale, onZoomChange, notifyGestureStart, notifyGestureEnd, notifyMotionChange, notifyTransformChange]);
+  }, [enabled, minScale, maxScale, notifyZoomChange, notifyGestureStart, notifyGestureEnd, notifyMotionChange, notifyTransformChange]);
 
   const panGesture = useMemo(() => {
     const gesture = Gesture.Pan()
@@ -653,7 +623,7 @@ export const useZoomableViewportGestures = ({
 
   const tapGesture = useMemo(() => {
     return Gesture.Tap()
-      .enabled(enabled && !!onContentTap)
+      .enabled(enabled && contentTapEnabled)
       .maxDistance(10)
       .maxDuration(350)
       .onTouchesDown((event, stateManager) => {
@@ -668,12 +638,11 @@ export const useZoomableViewportGestures = ({
           return;
         }
 
-        const currentScale = scale.value > 0 ? scale.value : 1;
-        const locationX = (event.x - translateX.value) / currentScale;
-        const locationY = (event.y - translateY.value) / currentScale;
-        runOnJS(notifyContentTap)(locationX, locationY);
+        const point = viewportPointToContent(event.x, event.y, scale.value,
+          translateX.value, translateY.value, containerWidth.value, containerHeight.value);
+        runOnJS(notifyContentTap)(point.x, point.y);
       });
-  }, [enabled, notifyContentTap, onContentTap, scale, translateX, translateY]);
+  }, [enabled, notifyContentTap, contentTapEnabled, scale, translateX, translateY]);
 
   return useMemo(() => {
     return Gesture.Simultaneous(pinchGesture, panGesture, tapGesture);

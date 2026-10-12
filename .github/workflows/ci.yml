@@ -52,6 +52,18 @@ jobs:
       - name: Run selection history regression test
         run: npm run test:native:selection-smoke
 
+      - name: Run zoom surface regression test
+        run: npm run test:native:zoom-smoke
+
+      - name: Set up Java for document JNI regression test
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Run continuous document JNI regression test
+        run: npm run test:native:document-jni
+
       - name: Build package artifacts
         run: npm run build
 

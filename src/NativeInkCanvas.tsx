@@ -1,3 +1,5 @@
+import { loadDocument } from './native-ink-canvas/documentBridge';
+import { trimIfNeeded } from './utils/trimIfNeeded';
 import React, {
   useRef,
   useImperativeHandle,
@@ -41,6 +43,7 @@ export {
   composeContinuousWindow,
   decomposeContinuousWindow,
   readBodyFileParsed,
+  parseNotebookData,
 } from "./native-ink-canvas/notebookBridge";
 
 export const NativeInkCanvas = forwardRef<
@@ -74,6 +77,19 @@ export const NativeInkCanvas = forwardRef<
       nativeRef.current?.setNativeProps?.(nativeProps);
     },
 
+    clearDocumentPage: (pageIndex: number, pageHeight: number) => {
+      if (!Number.isInteger(pageIndex) || pageIndex < 0 || !Number.isFinite(pageHeight) || pageHeight <= 0) {
+        throw new Error('Invalid document page geometry');
+      }
+      const node = findNodeHandle(nativeRef.current);
+      if (!node) throw new Error('Document canvas is not mounted');
+      if (Platform.OS === 'ios' && MobileInkCanvasViewManager) {
+        MobileInkCanvasViewManager.clearDocumentPage(node, pageIndex, pageHeight);
+      } else {
+        UIManager.dispatchViewManagerCommand(node, 'clearDocumentPage', [pageIndex, pageHeight]);
+      }
+    },
+
     clear: () => {
       const node = findNodeHandle(nativeRef.current);
       if (node) {
@@ -84,6 +100,19 @@ export const NativeInkCanvas = forwardRef<
           UIManager.dispatchViewManagerCommand(node, 'clear', []);
         }
       }
+    },
+
+    recordExternalEdit: async (before: string, after: string): Promise<boolean> => {
+      const node = findNodeHandle(nativeRef.current);
+      if (!node) return false;
+      if (Platform.OS === 'ios') {
+        if (!MobileInkCanvasViewManager?.recordExternalEdit) throw new Error('Native overlay history is unavailable');
+        return new Promise<boolean>((resolve) => {
+          MobileInkCanvasViewManager.recordExternalEdit(node, before, after, resolve);
+        });
+      }
+      if (!MobileInkModule?.recordExternalEdit) throw new Error('Native overlay history is unavailable');
+      return MobileInkModule.recordExternalEdit(node, before, after);
     },
 
     undo: () => {
@@ -171,6 +200,12 @@ export const NativeInkCanvas = forwardRef<
       }
     },
 
+    loadDocument: async (pagePayloads: string[], pageHeight: number): Promise<boolean> => {
+      const node = findNodeHandle(nativeRef.current);
+      if (!node) throw new Error('View not found');
+      lastToolSigRef.current = null;
+      return loadDocument(node, pagePayloads, pageHeight);
+    },
     loadBase64Data: async (base64String: string): Promise<boolean> => {
       const node = findNodeHandle(nativeRef.current);
       if (!node) {
@@ -178,7 +213,7 @@ export const NativeInkCanvas = forwardRef<
       }
 
       lastToolSigRef.current = null;
-      const trimmedPayload = base64String?.trim() ?? '';
+      const trimmedPayload = trimIfNeeded(base64String);
       if (!trimmedPayload) {
         if (Platform.OS === 'ios' && MobileInkCanvasViewManager) {
           MobileInkCanvasViewManager.clear(node);
@@ -319,7 +354,7 @@ export const NativeInkCanvas = forwardRef<
         throw new Error('View not found');
       }
 
-      const trimmedPayload = base64String?.trim() ?? '';
+      const trimmedPayload = trimIfNeeded(base64String);
       const normalizedPayload = trimmedPayload
         ? normalizePagePayloadForNativeLoad(trimmedPayload)
         : { isValid: true, normalizedPayload: '', reasonCode: null };
@@ -575,6 +610,7 @@ export const NativeInkCanvas = forwardRef<
     pdfBackgroundUri: props.pdfBackgroundUri,
     renderSuspended: props.renderSuspended,
     drawingPolicy: props.drawingPolicy,
+    continuousDocument: props.continuousDocument ?? false,
     renderScale: props.renderScale ?? 1,
     renderViewportLeftRatio: props.renderViewportLeftRatio ?? 0,
     renderViewportTopRatio: props.renderViewportTopRatio ?? 0,

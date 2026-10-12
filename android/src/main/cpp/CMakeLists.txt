@@ -38,6 +38,7 @@ add_library(
     SHARED
     ${NATIVE_DRAWING_SOURCES}
     jni_bridge.cpp
+    document_bridge.cpp
 )
 
 # Link Skia library

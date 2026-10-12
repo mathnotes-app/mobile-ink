@@ -13,6 +13,7 @@ import type {
 import {
   getAssignmentKey,
 } from "./continuous-engine-pool/helpers";
+import { createAssignmentQueue } from "./continuous-engine-pool/assignmentQueue";
 import { PooledCanvasSlot } from "./continuous-engine-pool/PooledCanvasSlot";
 import type {
   ContinuousEnginePoolAssignment,
@@ -59,6 +60,13 @@ export const ContinuousEnginePool = memo(forwardRef<
 }, ref) {
   const slotRefs = useRef<Array<PooledCanvasSlotHandle | null>>([]);
   const assignmentKeyRef = useRef("");
+  const assignmentQueueRef = useRef(createAssignmentQueue());
+  const captureCallbackRef = useRef(onSlotCaptureBeforeUnmount);
+  captureCallbackRef.current = onSlotCaptureBeforeUnmount;
+  const captureBeforeReassign = useCallback(async (pageId: string, data: string, previewUri?: string) => {
+    await captureCallbackRef.current(pageId, data, previewUri);
+    assignmentQueueRef.current.captured(pageId, data, previewUri);
+  }, []);
   const assignedPageIdsRef = useRef<Array<string | null>>(
     Array.from({ length: CONTINUOUS_ENGINE_POOL_SIZE }, () => null),
   );
@@ -108,7 +116,7 @@ export const ContinuousEnginePool = memo(forwardRef<
 
   const assignPages = useCallback(async (
     assignments: ContinuousEnginePoolAssignment[],
-  ) => {
+  ) => assignmentQueueRef.current.enqueue(assignments, async (assignments, isCurrent) => {
     const nextAssignmentKey = getAssignmentKey(assignments);
     assignmentKeyRef.current = nextAssignmentKey;
     const previousSlotByPageId = new Map<string, number>();
@@ -151,15 +159,12 @@ export const ContinuousEnginePool = memo(forwardRef<
       placedPageIds.add(assignment.page.id);
     }
 
-    assignedPageIdsRef.current = nextSlotAssignments.map(
-      (assignment) => assignment?.page.id ?? null,
-    );
     const slotPromises = Array.from(
       { length: CONTINUOUS_ENGINE_POOL_SIZE },
       (_, poolIndex) => {
         const slotRef = slotRefs.current[poolIndex];
         if (!slotRef) {
-          return Promise.resolve();
+          return Promise.reject(new Error(`Ink canvas slot ${poolIndex} is unavailable.`));
         }
 
         return slotRef.assign({
@@ -172,7 +177,11 @@ export const ContinuousEnginePool = memo(forwardRef<
       },
     );
 
-    await Promise.all(slotPromises);
+    const results = await Promise.allSettled(slotPromises);
+    assignedPageIdsRef.current = slotRefs.current.map(slot => slot?.getLoadedPageId() ?? null);
+    const failure = results.find(result => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+    if (!isCurrent()) return;
     const benchmarkRecordingOptions = benchmarkRecordingOptionsRef.current;
     if (benchmarkRecordingOptions) {
       await Promise.all(
@@ -187,10 +196,10 @@ export const ContinuousEnginePool = memo(forwardRef<
         )),
       );
     }
-    if (assignmentKeyRef.current === nextAssignmentKey) {
+    if (isCurrent() && assignmentKeyRef.current === nextAssignmentKey) {
       onAssignmentReadyRef.current?.(nextAssignmentKey);
     }
-  }, [
+  }), [
     backgroundType,
     canvasHeight,
     contentPadding,
@@ -249,6 +258,7 @@ export const ContinuousEnginePool = memo(forwardRef<
   }, []);
 
   const release = useCallback(async () => {
+    await assignmentQueueRef.current.drain();
     benchmarkRecordingOptionsRef.current = null;
     benchmarkRecordingSlotIndexesRef.current.clear();
     await Promise.all(
@@ -296,7 +306,7 @@ export const ContinuousEnginePool = memo(forwardRef<
           registerRef={registerPerPageSlot}
           shouldCaptureBeforeReassign={shouldCaptureBeforeReassign}
           capturePreviewOnReassign={capturePreviewOnReassign}
-          onCaptureBeforeReassign={onSlotCaptureBeforeUnmount}
+          onCaptureBeforeReassign={captureBeforeReassign}
         />
       ))}
     </>

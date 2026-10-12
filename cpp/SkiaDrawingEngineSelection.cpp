@@ -351,7 +351,7 @@ void SkiaDrawingEngine::cancelSelectionTransform() {
 void SkiaDrawingEngine::prepareSelectionDragCache() {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
 
-    if (selectedIndices_.empty()) {
+    if (viewportOnly_ || selectedIndices_.empty()) {
         hasDragCache_ = false;
         return;
     }

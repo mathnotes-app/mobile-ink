@@ -23,7 +23,8 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
 
   override func layoutSubviews() {
     super.layoutSubviews()
-    backgroundView?.setNeedsDisplay()
+    if !continuousDocument { backgroundView?.setNeedsDisplay() }
+    drawingView?.updateDocumentLayout(bounds.size)
     drawingView?.requestDisplay(forceWhenSuspended: true)
   }
 
@@ -89,6 +90,13 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
     }
   }
 
+  @objc var continuousDocument: Bool = false {
+    didSet {
+      backgroundView?.isHidden = continuousDocument
+      drawingView?.continuousDocument = continuousDocument
+    }
+  }
+
   @objc var renderScale: CGFloat = 1.0 {
     didSet {
       drawingView?.renderScale = renderScale
@@ -116,6 +124,7 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
     didSet {
       if let policy = drawingPolicy {
         drawingView?.drawingPolicy = policy
+
       }
     }
   }
@@ -146,6 +155,7 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
     if let backend = renderBackend {
       view.renderBackend = backend
     }
+    view.continuousDocument = continuousDocument
     view.renderScale = renderScale
     view.renderViewportLeftRatio = renderViewportLeftRatio
     view.renderViewportTopRatio = renderViewportTopRatio
@@ -156,6 +166,7 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
 
   func setMobileInkBackgroundView(_ view: MobileInkBackgroundView) {
     self.backgroundView = view
+    view.isHidden = continuousDocument
     // Forward any properties that were set before the background view was added
     if let type = backgroundType {
       view.backgroundType = type
@@ -193,7 +204,8 @@ class MobileInkCanvasViewManager: RCTViewManager {
 
     // Create and add drawing view on top (transparent Metal view)
     let drawingView = MobileInkCanvasView(frame: .zero, device: MTLCreateSystemDefaultDevice())
-    drawingView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    // Drawing geometry is set from the visible document rectangle.
+    drawingView.autoresizingMask = []
     drawingView.backgroundView = backgroundView // Set reference for export
     containerView.addSubview(drawingView)
 
@@ -220,12 +232,29 @@ class MobileInkCanvasViewManager: RCTViewManager {
 
   // MARK: - Exposed Methods
 
+  @objc func clearDocumentPage(_ node: NSNumber, pageIndex: NSNumber, pageHeight: NSNumber) {
+    DispatchQueue.main.async {
+      if let container = self.bridge.uiManager.view(forReactTag: node),
+         let view = self.findDrawingView(container) {
+        view.clearDocumentPage(pageIndex.int32Value, pageHeight: pageHeight.floatValue)
+      }
+    }
+  }
+
   @objc func clear(_ node: NSNumber) {
     DispatchQueue.main.async {
       if let container = self.bridge.uiManager.view(forReactTag: node),
          let view = self.findDrawingView(container) {
         view.clear()
       }
+    }
+  }
+
+  @objc func recordExternalEdit(_ node: NSNumber, before: String, after: String, callback: @escaping RCTResponseSenderBlock) {
+    DispatchQueue.main.async {
+      guard let container = self.bridge.uiManager.view(forReactTag: node),
+            let view = self.findDrawingView(container) else { callback([false]); return }
+      callback([view.recordExternalEdit(before, after: after)])
     }
   }
 

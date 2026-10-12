@@ -83,11 +83,13 @@ class MobileInkBackgroundView: UIView {
 
   var backgroundType: String = "plain" {
     didSet {
+      guard oldValue != backgroundType else { return }
       setNeedsDisplay()
     }
   }
   var isDarkMode: Bool = false {
     didSet {
+      guard oldValue != isDarkMode else { return }
       setNeedsDisplay()
     }
   }

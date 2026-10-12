@@ -15,16 +15,17 @@ import com.facebook.react.uimanager.ViewManager
  * with new architecture enabled. It provides module metadata via getReactModuleInfoProvider()
  * which allows RN to register modules without loading native libraries during startup scan.
  */
-@ReactModuleList(nativeModules = [MobileInkModule::class])
+@ReactModuleList(nativeModules = [MobileInkModule::class, MobileInkDocumentBridge::class])
 class MobileInkPackage : TurboReactPackage() {
 
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
-        return listOf(MobileInkModule(reactContext))
+        return listOf(MobileInkModule(reactContext), MobileInkDocumentBridge(reactContext))
     }
 
     override fun getModule(name: String, reactContext: ReactApplicationContext): NativeModule? {
         return when (name) {
             MobileInkModule.NAME -> MobileInkModule(reactContext)
+            MobileInkDocumentBridge.NAME -> MobileInkDocumentBridge(reactContext)
             else -> null
         }
     }
@@ -32,6 +33,11 @@ class MobileInkPackage : TurboReactPackage() {
     override fun getReactModuleInfoProvider(): ReactModuleInfoProvider {
         return ReactModuleInfoProvider {
             mapOf(
+                MobileInkDocumentBridge.NAME to ReactModuleInfo(
+                    MobileInkDocumentBridge.NAME,
+                    MobileInkDocumentBridge::class.java.name,
+                    false, false, false, false, false
+                ),
                 MobileInkModule.NAME to ReactModuleInfo(
                     MobileInkModule.NAME,
                     MobileInkModule::class.java.name,

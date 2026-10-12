@@ -33,13 +33,14 @@ struct ActiveStrokeViewport {
  * Implements surface caching and incremental rendering to maintain 60-120fps
  * during stroke input, regardless of stroke complexity.
  *
- * The surface is always allocated at the engine's logical dimensions. When
- * the viewport is zoomed, the surface covers only the visible region at
- * magnification instead of the whole canvas, keeping memory constant.
+ * Page engines allocate their preview at logical dimensions on first use.
+ * Viewport-only document engines allocate the visible pixel dimensions (capped
+ * at 4096 per axis), anchored in document coordinates even at identity zoom.
+ * Moving the viewport rebuilds incremental ink in the newly aligned surface.
  */
 class ActiveStrokeRenderer {
 public:
-    explicit ActiveStrokeRenderer(int width, int height, PathRenderer* pathRenderer);
+    explicit ActiveStrokeRenderer(int width, int height, PathRenderer* pathRenderer, bool viewportOnly = false);
 
     /**
      * Reset state for a new stroke
@@ -80,7 +81,7 @@ public:
 
     /**
      * Effective magnification the preview surface is currently anchored at.
-     * 1.0 means the surface maps 1:1 onto the full canvas.
+     * 1.0 means preview pixels map 1:1 onto document coordinates.
      */
     float viewportScale() const { return viewportScale_; }
 
@@ -91,6 +92,9 @@ public:
 
 private:
     PathRenderer* pathRenderer_;
+    const bool viewportOnly_;
+    int surfaceWidth_ = 0;
+    int surfaceHeight_ = 0;
     int logicalWidth_;
     int logicalHeight_;
     float viewportScale_ = 1.0f;

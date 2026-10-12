@@ -58,7 +58,7 @@ describe("PageBackgrounds", () => {
     ]);
   });
 
-  it("keeps regular backgrounds fully rendered", () => {
+  it("bounds regular paper backgrounds around the visible page too", () => {
     const view = render(
       <PageBackgrounds
         pages={pages(10)}
@@ -70,6 +70,12 @@ describe("PageBackgrounds", () => {
       />,
     );
 
-    expect(view.getAllByTestId("mock-page-background")).toHaveLength(10);
+    expect(view.getAllByTestId("mock-page-background")).toHaveLength(7);
   });
+});
+
+it('renders plain paper without native bitmap-backed background views', () => {
+  const view = render(<PageBackgrounds pages={pages(100)} pageWidth={1200} pageHeight={1600}
+    backgroundType="plain" showPageLabels={false} visiblePageIndex={50} />);
+  expect(view.queryAllByTestId('mock-page-background')).toHaveLength(0);
 });

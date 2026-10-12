@@ -19,7 +19,7 @@ import {
   OFFSCREEN_TOP,
   waitForNextFrame,
 } from "./helpers";
-import { getVisibleContentRect } from "../utils/viewportTransform";
+import { getPageRenderViewport } from "./renderViewport";
 import type {
   ContinuousEnginePoolAssignment,
   ContinuousEnginePoolSlotRef,
@@ -40,10 +40,6 @@ type SlotFrame = {
 };
 
 const PAGE_PREVIEW_CAPTURE_SCALE = 0.5;
-
-const clamp = (value: number, min: number, max: number) => (
-  Math.max(min, Math.min(max, value))
-);
 
 const hiddenSlotFrame = (height = 0): SlotFrame => ({
   top: OFFSCREEN_TOP,
@@ -175,35 +171,9 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
         ? Math.round(slotFrame.top / canvasHeight)
         : null;
 
-      if (!viewportTransform || pageIndex === null || pageWidth <= 0 || canvasHeight <= 0) {
-        return {
-          leftRatio: 0,
-          topRatio: 0,
-          widthRatio: 1,
-          heightRatio: 1,
-          intersectsViewport: true,
-        };
-      }
-
-      const visibleContentRect = getVisibleContentRect(viewportTransform);
-      const visibleLeft = visibleContentRect.left;
-      const visibleTop = visibleContentRect.top - contentPadding;
-      const visibleRight = visibleContentRect.right;
-      const visibleBottom = visibleContentRect.bottom - contentPadding;
-      const pageTop = pageIndex * canvasHeight;
-      const localLeft = clamp(visibleLeft, 0, pageWidth);
-      const localTop = clamp(visibleTop - pageTop, 0, canvasHeight);
-      const localRight = clamp(visibleRight, 0, pageWidth);
-      const localBottom = clamp(visibleBottom - pageTop, 0, canvasHeight);
-      const intersectsViewport = localRight > localLeft && localBottom > localTop;
-
-      return {
-        leftRatio: clamp(localLeft / pageWidth, 0, 1),
-        topRatio: clamp(localTop / canvasHeight, 0, 1),
-        widthRatio: clamp(Math.max(1, localRight - localLeft) / pageWidth, 0.001, 1),
-        heightRatio: clamp(Math.max(1, localBottom - localTop) / canvasHeight, 0.001, 1),
-        intersectsViewport,
-      };
+      return getPageRenderViewport(
+        viewportTransform, pageIndex, pageWidth, canvasHeight, contentPadding,
+      );
     }, [
       canvasHeight,
       contentPadding,
@@ -215,13 +185,19 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
     const slotRef = useMemo<ContinuousEnginePoolSlotRef>(
       () => ({
         getBase64Data: async () => {
-          if (!canvasRef.current) return BLANK_PAGE_PAYLOAD;
-          try {
-            const data = await canvasRef.current.getBase64Data();
-            return data || BLANK_PAGE_PAYLOAD;
-          } catch {
-            return BLANK_PAGE_PAYLOAD;
+          const canvas = canvasRef.current;
+          const pageId = loadedPageIdRef.current;
+          const token = loadTokenRef.current;
+          if (!canvas || !pageId || !isLoadedRef.current) {
+            throw new Error('Cannot serialize an unloaded ink page.');
           }
+          const data = await canvas.getBase64Data();
+          if (loadTokenRef.current !== token || loadedPageIdRef.current !== pageId ||
+              !isLoadedRef.current || canvasRef.current !== canvas) {
+            throw new Error('Ink page assignment changed during serialization.');
+          }
+          if (!data) throw new Error('Native ink serialization returned no payload.');
+          return data;
         },
         getPreviewData: async (scale = PAGE_PREVIEW_CAPTURE_SCALE) => {
           if (!canvasRef.current) return null;
@@ -288,23 +264,18 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
         return;
       }
 
-      try {
-        const data = await sourceRef.getBase64Data();
-        if (data) {
-          let previewUri: string | null = null;
-          if (capturePreviewOnReassignRef.current) {
-            try {
-              previewUri = await sourceRef.getBase64PngData(PAGE_PREVIEW_CAPTURE_SCALE);
-            } catch {
-              previewUri = null;
-            }
-          }
-          captureCallbackRef.current(pageId, data, previewUri || undefined);
+      const data = await sourceRef.getBase64Data();
+      if (!data) throw new Error('Native ink capture returned no payload.');
+      let previewUri: string | null = null;
+      if (capturePreviewOnReassignRef.current) {
+        try {
+          previewUri = await sourceRef.getBase64PngData(PAGE_PREVIEW_CAPTURE_SCALE);
+        } catch {
+          // Previews are replaceable; the drawing payload is not.
+          previewUri = null;
         }
-      } catch {
-        // A native serialize can fail during teardown. The normal save path
-        // still has pages[i].data, and the parent has a blank-overwrite guard.
       }
+      await captureCallbackRef.current(pageId, data, previewUri || undefined);
     }, []);
 
     const unregisterCurrentPage = useCallback(() => {
@@ -370,6 +341,11 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
       const token = loadTokenRef.current + 1;
       const nextPreviewUri = assignment.page.previewUri ?? null;
       loadTokenRef.current = token;
+      // Keep the old engine, registration and frame until its dirty ink is safe.
+      if (previousPageId && previousPageId !== nextPageId) {
+        await captureLoadedPage(previousPageId);
+        if (loadTokenRef.current !== token) return;
+      }
       currentAssignmentRef.current = assignment;
 
       if (!isAlreadyLoadedPage) {
@@ -443,14 +419,7 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
         },
       });
 
-      if (previousPageId && previousPageId !== nextPageId) {
-        await captureLoadedPage(previousPageId);
-        if (loadTokenRef.current !== token) {
-          return;
-        }
-      }
-
-      registerAssignment(nextPageId);
+      unregisterCurrentPage();
       isLoadedRef.current = false;
       loadedPageIdRef.current = null;
 
@@ -468,6 +437,7 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
 
         loadedPageIdRef.current = nextPageId;
         isLoadedRef.current = true;
+        registerAssignment(nextPageId);
         applyCurrentTool();
         await new Promise<void>((resolve) => {
           requestAnimationFrame(() => {
@@ -490,13 +460,15 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
           nextPageId,
           assignment.pageIndex,
         );
-      } catch {
+      } catch (error) {
         if (loadTokenRef.current === token) {
           loadedPageIdRef.current = null;
           isLoadedRef.current = false;
           setNativeCanvasVisible(false);
           setIsPreviewVisible(Boolean(nextPreviewUri));
+          unregisterCurrentPage();
         }
+        throw error;
       }
     }, [
       applyCurrentTool,
@@ -507,6 +479,7 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
       setNativeCanvasVisible,
       setSlotFrame,
       waitForNativeReady,
+      unregisterCurrentPage,
     ]);
 
     const release = useCallback(async () => {
@@ -568,6 +541,7 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
 
     useImperativeHandle(ref, () => ({
       assign,
+      getLoadedPageId: () => isLoadedRef.current ? loadedPageIdRef.current : null,
       applyToolState,
       startBenchmarkRecording,
       stopBenchmarkRecording,

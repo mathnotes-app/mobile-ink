@@ -76,7 +76,52 @@ class MobileInkCanvasView: MTKView {
     private var enginePixelHeight: Int32 = 0
     private var isApplyingDrawableSize = false
     private var clampedRenderScale: CGFloat {
-        max(1.0, min(5.0, renderScale.isFinite ? renderScale : 1.0))
+        let requested = max(1.0, min(5.0, renderScale.isFinite ? renderScale : 1.0))
+        return [CGFloat(1), 1.5, 2, 2.5, 3, 4, 5].min { abs($0 - requested) < abs($1 - requested) } ?? 1
+    }
+
+    private var documentSize: CGSize = .zero
+    private var renderGeometryUpdatePending = false
+    private var usesCroppedViewport: Bool { continuousDocument || clampedRenderScale > 1.01 }
+
+    func updateDocumentLayout(_ size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        documentSize = size
+        scheduleRenderGeometryUpdate()
+    }
+
+    private func scheduleRenderGeometryUpdate() {
+        guard !renderGeometryUpdatePending else { return }
+        renderGeometryUpdatePending = true
+        // React delivers scale and viewport props separately. Apply their final
+        // values together, avoiding a transient full-page high-resolution allocation.
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.renderGeometryUpdatePending = false
+            guard !self.isReleased, self.documentSize.width > 0, self.documentSize.height > 0 else { return }
+            let full = CGRect(origin: .zero, size: self.documentSize)
+            var target = full
+            if self.usesCroppedViewport {
+                let left = max(0, min(1, self.renderViewportLeftRatio))
+                let top = max(0, min(1, self.renderViewportTopRatio))
+                let width = max(0.001, min(1 - left, self.renderViewportWidthRatio))
+                let height = max(0.001, min(1 - top, self.renderViewportHeightRatio))
+                target = CGRect(x: left * full.width, y: top * full.height,
+                                width: width * full.width, height: height * full.height)
+            }
+            if self.continuousDocument {
+                // Initial prop delivery must never allocate a document-sized
+                // drawable even before the viewport ratios arrive.
+                let maxSide = 4096 / (self.baseContentScale() * self.clampedRenderScale)
+                target.size.width = min(target.width, maxSide)
+                target.size.height = min(target.height, maxSide)
+            }
+            if self.frame != target { self.frame = target }
+            self.applyDrawableContentScale(updateDrawableSize: true)
+            self.applyRenderViewportToEngine()
+            self.updateSelectionToolbarFrame()
+            self.requestDisplay(forceWhenSuspended: true)
+        }
     }
 
     // Store pending tool settings to apply when engine is ready
@@ -139,24 +184,47 @@ class MobileInkCanvasView: MTKView {
             }
         }
     }
+    // Set before loading content; changing rendering mode recreates the engine.
+    @objc var continuousDocument: Bool = false {
+        didSet {
+            guard oldValue != continuousDocument else { return }
+            if drawingEngine != nil {
+                configureDrawingEngine(width: enginePixelWidth, height: enginePixelHeight,
+                                       preserveExistingDrawing: true)
+            }
+            scheduleRenderGeometryUpdate()
+        }
+    }
+
     @objc var renderScale: CGFloat = 1.0 {
         didSet {
-            applyDrawableContentScale(updateDrawableSize: true)
-            applyRenderViewportToEngine()
-            requestDisplay(forceWhenSuspended: true)
+            guard oldValue != renderScale else { return }
+            scheduleRenderGeometryUpdate()
         }
     }
     @objc var renderViewportLeftRatio: CGFloat = 0.0 {
-        didSet { applyRenderViewportToEngine(); requestDisplay(forceWhenSuspended: true) }
+        didSet {
+            guard oldValue != renderViewportLeftRatio else { return }
+            scheduleRenderGeometryUpdate()
+        }
     }
     @objc var renderViewportTopRatio: CGFloat = 0.0 {
-        didSet { applyRenderViewportToEngine(); requestDisplay(forceWhenSuspended: true) }
+        didSet {
+            guard oldValue != renderViewportTopRatio else { return }
+            scheduleRenderGeometryUpdate()
+        }
     }
     @objc var renderViewportWidthRatio: CGFloat = 1.0 {
-        didSet { applyRenderViewportToEngine(); requestDisplay(forceWhenSuspended: true) }
+        didSet {
+            guard oldValue != renderViewportWidthRatio else { return }
+            scheduleRenderGeometryUpdate()
+        }
     }
     @objc var renderViewportHeightRatio: CGFloat = 1.0 {
-        didSet { applyRenderViewportToEngine(); requestDisplay(forceWhenSuspended: true) }
+        didSet {
+            guard oldValue != renderViewportHeightRatio else { return }
+            scheduleRenderGeometryUpdate()
+        }
     }
 
     @objc var onDrawingChange: RCTDirectEventBlock?
@@ -363,9 +431,10 @@ class MobileInkCanvasView: MTKView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        applyDrawableContentScale(updateDrawableSize: true)
-        applyRenderViewportToEngine()
-        updateSelectionToolbarFrame()
+        // Let the coalesced geometry update crop the frame before resizing
+        // its drawable. A layout between React prop setters must not allocate
+        // a temporary full-page texture at the new zoom level.
+        scheduleRenderGeometryUpdate()
     }
 
     private func baseContentScale() -> CGFloat {
@@ -401,13 +470,7 @@ class MobileInkCanvasView: MTKView {
             return
         }
 
-        let actualScaleX = pixelWidth > 0
-            ? CGFloat(pixelWidth) / CGFloat(enginePixelWidth)
-            : clampedRenderScale
-        let actualRenderScale = max(
-            1.0,
-            min(5.0, actualScaleX.isFinite ? actualScaleX : clampedRenderScale)
-        )
+        let actualRenderScale = clampedRenderScale
         let left = max(0.0, min(1.0, renderViewportLeftRatio)) * CGFloat(enginePixelWidth)
         let top = max(0.0, min(1.0, renderViewportTopRatio)) * CGFloat(enginePixelHeight)
         let widthRatio = max(0.001, min(1.0, renderViewportWidthRatio))
@@ -418,10 +481,10 @@ class MobileInkCanvasView: MTKView {
         setRenderViewport(
             engine,
             Float(actualRenderScale),
-            Float(left),
-            Float(top),
-            Float(max(1.0, width)),
-            Float(max(1.0, height))
+            Float(continuousDocument ? frame.minX * baseContentScale() : left),
+            Float(continuousDocument ? frame.minY * baseContentScale() : top),
+            Float(max(1.0, continuousDocument ? frame.width * baseContentScale() : width)),
+            Float(max(1.0, continuousDocument ? frame.height * baseContentScale() : height))
         )
     }
 
@@ -430,19 +493,10 @@ class MobileInkCanvasView: MTKView {
             return
         }
 
-        // Only redraw the background view when explicitly forced (e.g.
-        // unsuspending, theme change, PDF URI change). The background
-        // doesn't change due to user touches, and on PDF backgrounds
-        // a setNeedsDisplay triggers CGPDFPage.draw on the main
-        // thread (~10-100ms per page) -- doing that on EVERY touch
-        // event blocks stroke rendering and is the actual root cause
-        // of the "drawing super laggy on PDF" bug. MobileInkBackgroundView
-        // already calls setNeedsDisplay on its own property setters
-        // when its inputs (URI, theme, page numbers) change, so we
-        // don't need to mirror it here.
-        if forceWhenSuspended {
-            backgroundView?.setNeedsDisplay()
-        }
+        // Ink invalidation does not invalidate the separate paper/PDF view.
+        // Its content setters and UIView layout own background invalidation.
+        // In particular, zoom/viewport changes must not rerasterize a PDF
+        // on the main thread merely to present a sharper ink surface.
         setNeedsDisplay()
     }
 
@@ -531,8 +585,8 @@ class MobileInkCanvasView: MTKView {
         var bounds: [Float] = [0, 0, 0, 0]
         getSelectionBounds(engine, &bounds)
         let rect = CGRect(
-            x: CGFloat(bounds[0]) / scaleX,
-            y: CGFloat(bounds[1]) / scaleY,
+            x: CGFloat(bounds[0]) / scaleX - frame.minX,
+            y: CGFloat(bounds[1]) / scaleY - frame.minY,
             width: CGFloat(bounds[2] - bounds[0]) / scaleX,
             height: CGFloat(bounds[3] - bounds[1]) / scaleY
         )
@@ -693,7 +747,7 @@ class MobileInkCanvasView: MTKView {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let engine = drawingEngine, let touch = touches.first else { return }
 
-        let location = touch.location(in: self)
+        let location = touch.location(in: superview ?? self)
         currentTouchLocation = location
         let scaledX = Float(location.x * scaleX)
         let scaledY = Float(location.y * scaleY)
@@ -780,7 +834,7 @@ class MobileInkCanvasView: MTKView {
         }
 
         // Update cursor for all touch modes (but skip during selection move for performance)
-        let currentLocation = touch.location(in: self)
+        let currentLocation = touch.location(in: superview ?? self)
         currentTouchLocation = currentLocation
 
         if isTransformingSelection {
@@ -802,7 +856,7 @@ class MobileInkCanvasView: MTKView {
             cancelHoldToShapePreview()
             isHoldToShapeStrokeActive = false
             // Moving existing selection - optimized path
-            let location = touch.location(in: self)
+            let location = touch.location(in: superview ?? self)
             let dx = Float((location.x - lastPoint.x) * scaleX)
             let dy = Float((location.y - lastPoint.y) * scaleY)
 
@@ -972,6 +1026,15 @@ class MobileInkCanvasView: MTKView {
         }
     }
 
+    @objc func clearDocumentPage(_ pageIndex: Int32, pageHeight: Float) {
+        guard let engine = drawingEngine else { return }
+        let hadSelection = getSelectionCount(engine) > 0
+        guard clearContinuousDocumentPage(engine, pageIndex, pageHeight) else { return }
+        endSelectionInteractionAfterHistoryChange(hadSelection: hadSelection)
+        requestDisplay()
+        onDrawingChange?([:])
+    }
+
     @objc func clear() {
         guard let engine = drawingEngine else { return }
         let hadSelection = getSelectionCount(engine) > 0
@@ -981,22 +1044,41 @@ class MobileInkCanvasView: MTKView {
         onDrawingChange?([:])
     }
 
+    @objc func recordExternalEdit(_ before: String, after: String) -> Bool {
+        guard let engine = drawingEngine else { return false }
+        return before.withCString { beforeBytes in
+            after.withCString { afterBytes in commitExternalEdit(engine, beforeBytes, afterBytes) }
+        }
+    }
+
     @objc func undo() {
         guard let engine = drawingEngine else { return }
         let hadSelection = getSelectionCount(engine) > 0
-        undoStroke(engine)
+        let external = undoExternalEdit(engine)
         endSelectionInteractionAfterHistoryChange(hadSelection: hadSelection)
         requestDisplay()
-        onDrawingChange?([:])
+        if let external {
+            let payload = String(cString: external)
+            free(external)
+            onDrawingChange?(["historyAction": "undo", "externalEdit": ["payload": payload]])
+        } else {
+            onDrawingChange?(["historyAction": "undo"])
+        }
     }
 
     @objc func redo() {
         guard let engine = drawingEngine else { return }
         let hadSelection = getSelectionCount(engine) > 0
-        redoStroke(engine)
+        let external = redoExternalEdit(engine)
         endSelectionInteractionAfterHistoryChange(hadSelection: hadSelection)
         requestDisplay()
-        onDrawingChange?([:])
+        if let external {
+            let payload = String(cString: external)
+            free(external)
+            onDrawingChange?(["historyAction": "redo", "externalEdit": ["payload": payload]])
+        } else {
+            onDrawingChange?(["historyAction": "redo"])
+        }
     }
 
     /// Undo, redo and clear rebuild the stroke list, so the engine drops its
@@ -1035,7 +1117,8 @@ class MobileInkCanvasView: MTKView {
             // Show cursor with circle matching eraser size
             // Width is in canvas coordinates, need to convert to view coordinates
             let radiusInViewCoords = CGFloat(width) / (2.0 * scaleX)
-            let circlePath = UIBezierPath(arcCenter: location,
+            let localLocation = CGPoint(x: location.x - frame.minX, y: location.y - frame.minY)
+            let circlePath = UIBezierPath(arcCenter: localLocation,
                                          radius: radiusInViewCoords,
                                          startAngle: 0,
                                          endAngle: .pi * 2,
@@ -1163,6 +1246,12 @@ class MobileInkCanvasView: MTKView {
     }
 
     @objc func loadBase64Data(_ base64String: String, callback: @escaping RCTResponseSenderBlock) {
+        // React attaches the native view before its first layout creates the
+        // engine. Report retryable readiness without treating valid ink as bad.
+        guard drawingEngine != nil else {
+            callback([NSNull(), false])
+            return
+        }
         deferredBase64Payload = nil
         if let errorMessage = applyBase64Data(base64String) {
             callback([errorMessage, NSNull()])
@@ -1432,12 +1521,12 @@ class MobileInkCanvasView: MTKView {
         if let renderCanvas = renderCanvas {
             // Engine stores strokes in pixel coordinates, but we're exporting at page dimensions
             // Scale to convert: pixels → page → export scale (using minRenderScale for quality)
-            let pixelToPage = Float(pageWidth) / Float(pixelWidth)  // e.g. 788 / 1576 = 0.5
+            let pixelToPage = Float(pageWidth) / Float(max(1, enginePixelWidth))  // e.g. 788 / 1576 = 0.5
             let totalScale = pixelToPage * Float(minRenderScale)  // Use higher scale for quality
             scaleSkiaCanvas(renderCanvas, totalScale, totalScale)
 
             // Render engine strokes (in pixel coords) to the scaled canvas
-            renderToCanvas(engine, renderCanvas)
+            renderToCanvasForExport(engine, renderCanvas)
             destroySkiaCanvas(renderCanvas)
         }
 
@@ -1577,7 +1666,9 @@ class MobileInkCanvasView: MTKView {
             drawingEngine = nil
         }
 
-        drawingEngine = createDrawingEngine(width, height)
+        drawingEngine = continuousDocument
+            ? createContinuousDrawingEngine(width, height)
+            : createDrawingEngine(width, height)
         enginePixelWidth = width
         enginePixelHeight = height
 
@@ -1678,8 +1769,8 @@ extension MobileInkCanvasView: MTKViewDelegate {
         if isReleased { return }
 
         // Calculate page dimensions from bounds (for export)
-        if bounds.width > 0 && bounds.height > 0 {
-            pageWidth = bounds.width
+        if documentSize.width > 0 && documentSize.height > 0 {
+            pageWidth = documentSize.width
             pageHeight = pageWidth * (11.0 / 8.5) // US Letter aspect ratio
         }
 
@@ -1691,11 +1782,11 @@ extension MobileInkCanvasView: MTKViewDelegate {
         let baseScale = baseContentScale()
         let nextEnginePixelWidth: Int32
         let nextEnginePixelHeight: Int32
-        if bounds.width > 0 && bounds.height > 0 {
+        if documentSize.width > 0 && documentSize.height > 0 {
             scaleX = baseScale
             scaleY = baseScale
-            nextEnginePixelWidth = Int32(max(1, round(bounds.width * baseScale)))
-            nextEnginePixelHeight = Int32(max(1, round(bounds.height * baseScale)))
+            nextEnginePixelWidth = Int32(max(1, round(documentSize.width * baseScale)))
+            nextEnginePixelHeight = Int32(max(1, round(documentSize.height * baseScale)))
         } else {
             nextEnginePixelWidth = 0
             nextEnginePixelHeight = 0
@@ -1723,11 +1814,18 @@ extension MobileInkCanvasView: MTKViewDelegate {
                 )
                 print("✅ Drawing engine created with size: \(pixelWidth)x\(pixelHeight) (page: \(pageWidth)x\(pageHeight))")
             } else if enginePixelWidth != nextEnginePixelWidth || enginePixelHeight != nextEnginePixelHeight {
-                configureDrawingEngine(
-                    width: nextEnginePixelWidth,
-                    height: nextEnginePixelHeight,
-                    preserveExistingDrawing: true
-                )
+                if continuousDocument, let engine = drawingEngine,
+                   resizeContinuousDrawingEngine(engine, nextEnginePixelWidth, nextEnginePixelHeight) {
+                    enginePixelWidth = nextEnginePixelWidth
+                    enginePixelHeight = nextEnginePixelHeight
+                    applyRenderViewportToEngine()
+                } else {
+                    configureDrawingEngine(
+                        width: nextEnginePixelWidth,
+                        height: nextEnginePixelHeight,
+                        preserveExistingDrawing: true
+                    )
+                }
                 print("✅ Drawing engine resized to: \(pixelWidth)x\(pixelHeight) (page: \(pageWidth)x\(pageHeight))")
             } else {
                 applyRenderViewportToEngine()
@@ -1786,7 +1884,7 @@ extension MobileInkCanvasView: MTKViewDelegate {
            let freshDrawable = view.currentDrawable {
             let texturePtr = Unmanaged.passUnretained(freshDrawable.texture).toOpaque()
             let renderStart = CACurrentMediaTime()
-            if renderToGaneshMetalTexture(engine, ganeshContext, texturePtr, width, height) {
+            if renderToGaneshMetalTexture(engine, ganeshContext, texturePtr, width, height, usesCroppedViewport) {
                 let renderDurationMs = (CACurrentMediaTime() - renderStart) * 1000.0
                 guard let commandBuffer = commandQueue.makeCommandBuffer() else {
                     return
@@ -1822,7 +1920,8 @@ extension MobileInkCanvasView: MTKViewDelegate {
         // Render Skia strokes to pixel buffer (no scaling - engine already in pixel coords)
         let canvas = createSkiaCanvas(UnsafeMutableRawPointer(buffer), width, height, Int32(bytesPerRow))
         if let canvas = canvas {
-            renderToCanvas(engine, canvas)
+            if usesCroppedViewport { renderVisibleViewportToCanvas(engine, canvas) }
+            else { renderToCanvas(engine, canvas) }
             destroySkiaCanvas(canvas)
         }
 
@@ -1915,7 +2014,7 @@ extension MobileInkCanvasView {
   }
 
   private func processTouchSample(engine: OpaquePointer, touch: UITouch) {
-    let location = touch.location(in: self)
+    let location = touch.location(in: superview ?? self)
     let pressure = normalizedPressure(for: touch)
     let (azimuth, altitude) = extractAzimuthAndAltitude(for: touch)
     let isPencilInput = PencilStrokeInputNormalizer.isPencil(touch)
@@ -1929,7 +2028,7 @@ extension MobileInkCanvasView {
   // PREDICTIVE TOUCH: Process predicted touch samples for Apple Pencil low-latency rendering
   // These points are rendered temporarily and replaced by actual data on next touch event
   private func processPredictedTouchSample(engine: OpaquePointer, touch: UITouch) {
-    let location = touch.location(in: self)
+    let location = touch.location(in: superview ?? self)
     let pressure = normalizedPressure(for: touch)
     let (azimuth, altitude) = extractAzimuthAndAltitude(for: touch)
     let isPencilInput = PencilStrokeInputNormalizer.isPencil(touch)

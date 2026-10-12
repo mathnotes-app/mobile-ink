@@ -1,3 +1,4 @@
+import { trimIfNeeded } from './utils/trimIfNeeded';
 const BLANK_PAGE_PAYLOAD = '{"pages":{}}';
 
 export type NormalizedPagePayload = {
@@ -9,7 +10,7 @@ export type NormalizedPagePayload = {
 export function normalizePagePayloadForNativeLoad(
   pagePayload: string | null | undefined,
 ): NormalizedPagePayload {
-  const trimmedPayload = pagePayload?.trim() ?? "";
+  const trimmedPayload = trimIfNeeded(pagePayload);
   if (!trimmedPayload) {
     return {
       isValid: true,

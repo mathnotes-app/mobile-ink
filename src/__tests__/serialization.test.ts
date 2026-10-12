@@ -127,6 +127,7 @@ describe('deserializeNotebookData', () => {
     expect(result.pages[0].data).toBe('data1');
     expect(result.pages[1].data).toBe('data2');
     expect(result.pages[2].data).toBe('data3');
+    expect(result.pages.every(page => page.pdfPageNumber == null)).toBe(true);
   });
 
   it('extracts original canvas width', () => {

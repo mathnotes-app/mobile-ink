@@ -90,9 +90,12 @@ struct StrokeDelta {
         PixelErase,    // erasedBy circles appended to one or more strokes (pixel eraser)
         MoveStrokes,   // strokes translated by (dx, dy) (selection finalize-move)
         ReplaceStrokes, // selected strokes transformed in place (resize handles)
+        ExternalEdit,  // opaque before/after overlay patch; no ink mutation
         Clear,         // all strokes wiped (clear button, full-screen erase)
     };
     Kind kind;
+    std::string externalBefore;
+    std::string externalAfter;
 
     // For AddStrokes: the strokes that were appended (1 entry for normal
     // pen stroke, N entries for paste). Undo = pop_back N, redo = push_back from delta.
