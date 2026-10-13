@@ -76,13 +76,20 @@ export function resolveDocumentRenderTarget(
   layout: DocumentRenderLayout,
   isMoving: boolean,
 ): DocumentRenderTarget {
-  const width = Math.max(1, layout.pageWidth);
-  const height = Math.max(1, layout.pageHeight * Math.max(1, layout.pageCount));
+  // Layout can be degenerate before the first native layout; never let NaN or
+  // Infinity reach native frame geometry.
+  const finite = (value: number, fallback: number) => (Number.isFinite(value) ? value : fallback);
+  const pageWidth = Math.max(1, finite(layout.pageWidth, 1));
+  const pageHeight = Math.max(1, finite(layout.pageHeight, 1));
+  const pageCount = Math.max(1, finite(layout.pageCount, 1));
+  const contentPadding = Math.max(0, finite(layout.contentPadding, 0));
+  const width = pageWidth;
+  const height = pageHeight * pageCount;
   const requestedRatio = layout.pixelRatio ?? PixelRatio.get();
   const pixelRatio = Math.max(1, Number.isFinite(requestedRatio) ? requestedRatio : 1);
   const maxRenderScale = layout.maxRenderScale ?? MAX_NATIVE_RENDER_SCALE;
-  const visible = toRect(getDocumentRenderViewport(transform, layout.pageWidth, layout.pageHeight,
-    layout.pageCount, layout.contentPadding), width, height);
+  const visible = toRect(getDocumentRenderViewport(transform, pageWidth, pageHeight,
+    pageCount, contentPadding), width, height);
   // Prefer the nearest bucket for crisp settled ink; the lower bucket always
   // fits because its visible pixels never exceed the screen's.
   const zoom = transform?.scale ?? 1;

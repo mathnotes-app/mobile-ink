@@ -76,4 +76,13 @@ describe('continuous document render target', () => {
     const rect = rectOf(grown, 4000);
     expect((rect.bottom - rect.top) * 2).toBeLessThanOrEqual(4000.5);
   });
+
+  it('stays finite and stable for degenerate layout or transform values', () => {
+    const bad = { pageWidth: Number.NaN, pageHeight: 0, pageCount: Number.POSITIVE_INFINITY, contentPadding: Number.NaN,
+      pixelRatio: Number.NaN, maxRenderScale: Number.NaN };
+    const transform = { scale: Number.NaN, translateX: Number.NaN, translateY: Number.NaN, containerWidth: 0, containerHeight: 0 };
+    const first = resolveDocumentRenderTarget(null, transform, bad, false);
+    for (const value of Object.values(first)) expect(Number.isFinite(value)).toBe(true);
+    expect(resolveDocumentRenderTarget(first, transform, bad, false)).toBe(first);
+  });
 });
