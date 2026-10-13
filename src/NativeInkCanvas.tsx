@@ -1,4 +1,4 @@
-import { loadDocument } from './native-ink-canvas/documentBridge';
+import { captureDocument, loadDocument } from './native-ink-canvas/documentBridge';
 import { trimIfNeeded } from './utils/trimIfNeeded';
 import React, {
   useRef,
@@ -205,6 +205,11 @@ export const NativeInkCanvas = forwardRef<
       if (!node) throw new Error('View not found');
       lastToolSigRef.current = null;
       return loadDocument(node, pagePayloads, pageHeight);
+    },
+    captureDocument: async (pageCount: number, pageHeight: number): Promise<string[]> => {
+      const node = findNodeHandle(nativeRef.current);
+      if (!node) throw new Error('View not found');
+      return captureDocument(node, pageCount, pageHeight);
     },
     loadBase64Data: async (base64String: string): Promise<boolean> => {
       const node = findNodeHandle(nativeRef.current);

@@ -113,6 +113,19 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_com_mathnotes_mobileink_DocumentC
     } catch (const std::exception& error) { reject(env, error); return nullptr; }
     catch (...) { reject(env, std::runtime_error("Unknown document codec failure")); return nullptr; }
 }
+// `snapshot` is a std::vector<Stroke>* from MobileInkCanvasView.takeDrawingSnapshot;
+// the caller keeps ownership. Partitioning the copy avoids re-decoding a
+// serialized document on every autosave.
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_mathnotes_mobileink_DocumentCodec_partitionSnapshot(
+    JNIEnv* env, jobject, jlong snapshot, jint count, jfloat height) {
+    try {
+        if (!snapshot) throw std::invalid_argument("Missing drawing snapshot");
+        if (count < 1 || count > 100000) throw std::invalid_argument("Invalid document page count");
+        const auto& strokes = *reinterpret_cast<const std::vector<Stroke>*>(snapshot);
+        return encodePages(env, partitionContinuousDocument(strokes, count, height));
+    } catch (const std::exception& error) { reject(env, error); return nullptr; }
+    catch (...) { reject(env, std::runtime_error("Unknown document codec failure")); return nullptr; }
+}
 extern "C" JNIEXPORT jobjectArray JNICALL Java_com_mathnotes_mobileink_DocumentCodec_project(
     JNIEnv* env, jobject, jobjectArray data, jobjectArray orders, jbooleanArray flags, jfloat height, jintArray requested) {
     try {

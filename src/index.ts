@@ -35,7 +35,7 @@ export type {
   ContinuousEnginePoolToolState,
 } from "./ContinuousEnginePool";
 
-export { ContinuousDocumentCanvas, type ContinuousDocumentCanvasRef, type ContinuousDocumentCanvasProps } from "./infinite-ink-canvas/ContinuousDocumentCanvas";
+export { ContinuousDocumentCanvas, DocumentChangedDuringCaptureError, isDocumentCaptureSuperseded, type ContinuousDocumentCanvasRef, type ContinuousDocumentCanvasProps } from "./infinite-ink-canvas/ContinuousDocumentCanvas";
 export { InfiniteInkCanvas } from "./InfiniteInkCanvas";
 export type {
   InfiniteInkCanvasProps,
@@ -92,3 +92,4 @@ export type {
 export { composeDocument, partitionDocument, projectDocumentPages } from "./native-ink-canvas/documentBridge";
 
 export { getDocumentRenderViewport } from "./utils/documentViewport";
+export { resolveDocumentRenderTarget, MAX_NATIVE_RENDER_SCALE, type DocumentRenderTarget, type DocumentRenderLayout } from "./utils/documentRenderTarget";

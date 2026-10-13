@@ -2,6 +2,14 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [0.3.9] - 2026-10-13
+
+- Saving no longer blocks pen input. iOS and Android copy the strokes on the drawing thread and serialize, base64-encode, and wrap the copy on a background thread. Previously the whole document was serialized on the UI (iOS main / Android GL) thread on every autosave, delaying strokes drawn during a save on dense notebooks.
+- Added `captureDocument` (and `NativeInkCanvasRef.captureDocument`): continuous canvases capture page payloads natively by partitioning the stroke copy off the UI thread. `ContinuousDocumentCanvas` uses it, so autosave no longer serializes the whole document, passes it through JavaScript and decodes it again (about 68% less background save CPU on a dense 100-page notebook, simulator).
+- Superseded saves reject with `DocumentChangedDuringCaptureError`; `isDocumentCaptureSuperseded` lets hosts treat them as retries rather than failures.
+- Continuous-document pan and zoom no longer re-render native ink every frame. `resolveDocumentRenderTarget` renders an overscanned crop that is reused until the visible area leaves it, holds the render resolution during a gesture, and settles at the nearest crisp resolution. `ContinuousDocumentCanvas` uses it and no longer re-renders its subtree on each viewport update.
+- Added `npm run test:native:snapshot-smoke`, run in CI.
+
 ## [0.3.8] - 2026-10-12
 
 - Added continuous document drawing across page boundaries, preserving stroke order, eraser targets, undo/redo, and page-local save/export data.

@@ -1205,46 +1205,6 @@ class MobileInkCanvasView: MTKView {
         requestDisplay(forceWhenSuspended: true)
     }
 
-    @objc func getBase64Data(_ callback: @escaping RCTResponseSenderBlock) {
-        guard let engine = drawingEngine else {
-            callback(["Engine not initialized", NSNull()])
-            return
-        }
-
-        var size: Int32 = 0
-        guard let dataPtr = serializeDrawing(engine, &size), size > 0 else {
-            // Empty drawing - return empty JSON
-            let emptyJson = "{\"pages\":{}}"
-            callback([NSNull(), emptyJson])
-            return
-        }
-
-        // Convert to Data
-        let data = Data(bytes: dataPtr, count: Int(size))
-        freeSerializedData(dataPtr)
-
-        // Encode as base64
-        let base64String = data.base64EncodedString()
-
-        // Wrap in PencilKit-compatible JSON format
-        let jsonDict: [String: Any] = [
-            "pages": [
-                "0": base64String
-            ]
-        ]
-
-        do {
-            let jsonData = try JSONSerialization.data(withJSONObject: jsonDict, options: [])
-            if let jsonString = String(data: jsonData, encoding: .utf8) {
-                callback([NSNull(), jsonString])
-            } else {
-                callback(["Failed to encode JSON string", NSNull()])
-            }
-        } catch {
-            callback([error.localizedDescription, NSNull()])
-        }
-    }
-
     @objc func loadBase64Data(_ base64String: String, callback: @escaping RCTResponseSenderBlock) {
         // React attaches the native view before its first layout creates the
         // engine. Report retryable readiness without treating valid ink as bad.

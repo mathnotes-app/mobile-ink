@@ -52,6 +52,9 @@ jobs:
       - name: Run selection history regression test
         run: npm run test:native:selection-smoke
 
+      - name: Run drawing snapshot regression test
+        run: npm run test:native:snapshot-smoke
+
       - name: Run zoom surface regression test
         run: npm run test:native:zoom-smoke
 

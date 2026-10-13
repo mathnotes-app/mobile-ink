@@ -22,3 +22,14 @@ describe("native render scale budgeting", () => {
     expect(quantizeNativeRenderScale(Number.NaN, 5)).toBe(1);
   });
 });
+
+describe('nearestNativeRenderScale', () => {
+  const { nearestNativeRenderScale } = require('../nativeRenderScale');
+  it('matches the native nearest-bucket choice within the allowed maximum', () => {
+    expect(nearestNativeRenderScale(1.2, 5)).toBe(1);
+    expect(nearestNativeRenderScale(1.3, 5)).toBe(1.5);
+    expect(nearestNativeRenderScale(3.6, 5)).toBe(4);
+    expect(nearestNativeRenderScale(4.9, 3)).toBe(3);
+    expect(nearestNativeRenderScale(Number.NaN, 5)).toBe(1);
+  });
+});
