@@ -4,6 +4,7 @@
 #include "cpp/ContinuousDocumentPages.h"
 #include "cpp/DrawingSerialization.h"
 #include <cmath>
+#include <memory>
 #include <stdexcept>
 
 namespace {
@@ -69,6 +70,8 @@ NSString* encodePage(const ContinuousDocumentPage& page, bool includeOrder) {
 @protocol MobileInkDocumentLoader <NSObject>
 - (void)loadBase64Data:(NSNumber*)viewTag base64String:(NSString*)payload
              callback:(RCTResponseSenderBlock)callback;
+// Main thread only; returns an owned std::vector<Stroke>* or NULL.
+- (void*)takeDrawingSnapshot:(NSNumber*)viewTag;
 @end
 
 @interface MobileInkDocumentBridge : NSObject <RCTBridgeModule>
@@ -135,6 +138,44 @@ RCT_EXPORT_METHOD(loadDocument:(nonnull NSNumber*)viewTag
     } catch (...) {
         reject(@"DOCUMENT_LOAD_FAILED", @"Unable to process drawing data", nil);
     }
+}
+// Copy strokes on the main thread, then partition and encode that copy on this
+// module's background queue. Unlike getBase64Data + partitionDocument, the
+// whole document is never serialized, sent through JavaScript, and decoded.
+RCT_EXPORT_METHOD(captureDocument:(nonnull NSNumber*)viewTag
+                  pageCount:(NSInteger)pageCount
+                  pageHeight:(double)pageHeight
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+    if (pageCount <= 0 || pageCount > 100000) {
+        reject(@"DOCUMENT_CAPTURE_FAILED", @"Invalid document page count", nil);
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        id<MobileInkDocumentLoader> loader = (id)[self.bridge moduleForName:@"MobileInkCanvasViewManager"];
+        if (![loader respondsToSelector:@selector(takeDrawingSnapshot:)]) {
+            reject(@"DOCUMENT_CAPTURE_FAILED", @"MobileInkCanvasViewManager is unavailable", nil);
+            return;
+        }
+        auto* strokes = static_cast<std::vector<nativedrawing::Stroke>*>([loader takeDrawingSnapshot:viewTag]);
+        if (!strokes) {
+            reject(@"DOCUMENT_CAPTURE_FAILED", @"View not found", nil);
+            return;
+        }
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            std::unique_ptr<std::vector<nativedrawing::Stroke>> owned(strokes);
+            try {
+                const auto pages = nativedrawing::partitionContinuousDocument(*owned, (int)pageCount, pageHeight);
+                NSMutableArray* result = [NSMutableArray arrayWithCapacity:pages.size()];
+                for (const auto& page : pages) [result addObject:encodePage(page, true)];
+                resolve(result);
+            } catch (const std::exception& error) {
+                reject(@"DOCUMENT_CAPTURE_FAILED", [NSString stringWithUTF8String:error.what()], nil);
+            } catch (...) {
+                reject(@"DOCUMENT_CAPTURE_FAILED", @"Unable to process drawing data", nil);
+            }
+        });
+    });
 }
 RCT_EXPORT_METHOD(partitionDocument:(NSString*)payload
                   pageCount:(NSInteger)pageCount

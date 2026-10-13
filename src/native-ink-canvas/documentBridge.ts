@@ -5,6 +5,7 @@ interface DocumentBridge {
   projectDocumentPages(payloads: string[], pageHeight: number, pageIndices: number[]): Promise<string[]>;
   composeDocument(payloads: string[], pageHeight: number): Promise<string>;
   partitionDocument(payload: string, pageCount: number, pageHeight: number): Promise<string[]>;
+  captureDocument(viewTag: number, pageCount: number, pageHeight: number): Promise<string[]>;
 }
 function bridge(): DocumentBridge {
   const native = NativeModules.MobileInkDocumentBridge as DocumentBridge | undefined;
@@ -16,6 +17,15 @@ export function composeDocument(payloads: string[], pageHeight: number): Promise
 }
 export function partitionDocument(payload: string, pageCount: number, pageHeight: number): Promise<string[]> {
   return bridge().partitionDocument(payload, pageCount, pageHeight);
+}
+
+/**
+ * Page payloads of a mounted continuous canvas. Native copies the strokes on
+ * the drawing thread and partitions the copy in the background; the whole
+ * document never crosses into JavaScript.
+ */
+export function captureDocument(viewTag: number, pageCount: number, pageHeight: number): Promise<string[]> {
+  return bridge().captureDocument(viewTag, pageCount, pageHeight);
 }
 
 /** Render-only payloads containing neighboring overflow. Do not save these. */

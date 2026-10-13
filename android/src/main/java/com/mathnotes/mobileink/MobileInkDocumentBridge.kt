@@ -121,6 +121,34 @@ class MobileInkDocumentBridge(context: ReactApplicationContext) : ReactContextBa
         }
     }
 
+    /**
+     * Captures the live document as page payloads. Strokes are copied on the
+     * view's GL thread; partitioning and encoding run on the codec worker, so
+     * neither touch input nor rendering waits for a save.
+     */
+    @ReactMethod
+    fun captureDocument(viewTag: Int, pageCount: Double, pageHeight: Double, promise: Promise) {
+        if (!(pageCount.isFinite() && pageCount >= 1 && pageCount <= 100000 && pageCount == kotlin.math.floor(pageCount))) {
+            promise.reject("DOCUMENT_CAPTURE_FAILED", "Invalid document page count"); return
+        }
+        reactApplicationContext.runOnUiQueueThread {
+            val view = MobileInkModule.getView(viewTag)
+            if (view == null) {
+                promise.reject("DOCUMENT_CAPTURE_FAILED", "View not found"); return@runOnUiQueueThread
+            }
+            run(promise, "DOCUMENT_CAPTURE_FAILED") {
+                val snapshot = view.takeDrawingSnapshot()
+                require(snapshot != 0L) { "Unable to snapshot drawing" }
+                try {
+                    val pages = DocumentCodec.partitionSnapshot(snapshot, pageCount.toInt(), pageHeight.toFloat())
+                    Arguments.createArray().apply { pages.forEach { pushString(encode(it, true)) } }
+                } finally {
+                    view.releaseDrawingSnapshot(snapshot)
+                }
+            }
+        }
+    }
+
     @ReactMethod
     fun projectDocumentPages(values: ReadableArray, pageHeight: Double, requested: ReadableArray, promise: Promise) {
         val payloads: List<String>
@@ -151,5 +179,6 @@ internal object DocumentCodec {
     init { System.loadLibrary("mobileink") }
     external fun compose(bytes: Array<ByteArray>, orders: Array<LongArray>, hasOrders: BooleanArray, height: Float): ByteArray
     external fun partition(bytes: ByteArray, order: LongArray, hasOrder: Boolean, count: Int, height: Float): Array<DocumentPageData>
+    external fun partitionSnapshot(snapshot: Long, count: Int, height: Float): Array<DocumentPageData>
     external fun project(bytes: Array<ByteArray>, orders: Array<LongArray>, hasOrders: BooleanArray, height: Float, indices: IntArray): Array<DocumentPageData>
 }

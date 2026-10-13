@@ -114,9 +114,16 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun getBase64Data(viewTag: Int, promise: Promise) {
         reactContext.runOnUiQueueThread {
-            try {
-                val view = findDrawingView(viewTag)
-                if (view != null) {
+            val view = findDrawingView(viewTag)
+            if (view == null) {
+                // View not found - likely unmounted during auto-save, return null gracefully
+                android.util.Log.w("MobileInkModule", "getBase64Data: view not found for tag $viewTag")
+                promise.resolve(null)
+                return@runOnUiQueueThread
+            }
+            // Serialization runs off the UI thread so autosave never stalls pen input.
+            executor.execute {
+                try {
                     val data = view.serializeDrawing()
                     if (data != null && data.isNotEmpty()) {
                         val base64 = Base64.encodeToString(data, Base64.NO_WRAP)
@@ -127,15 +134,11 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
                         // Empty drawing - return empty JSON like iOS
                         promise.resolve("""{"pages":{}}""")
                     }
-                } else {
-                    // View not found - likely unmounted during auto-save, return null gracefully
-                    android.util.Log.w("MobileInkModule", "getBase64Data: view not found for tag $viewTag")
+                } catch (e: Exception) {
+                    // Don't reject on exceptions either - gracefully return null
+                    android.util.Log.e("MobileInkModule", "getBase64Data: exception", e)
                     promise.resolve(null)
                 }
-            } catch (e: Exception) {
-                // Don't reject on exceptions either - gracefully return null
-                android.util.Log.e("MobileInkModule", "getBase64Data: exception", e)
-                promise.resolve(null)
             }
         }
     }
@@ -319,18 +322,16 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
                 return@runOnUiQueueThread
             }
 
-            // Serialize on the UI queue (deserialize/serialize already coordinate
-            // with the GL thread inside the view), then move the file write to a
-            // background executor so it doesn't block the UI thread.
-            val data: ByteArray? = try {
-                view.serializeDrawing()
-            } catch (e: Exception) {
-                android.util.Log.e("MobileInkModule", "persistEngineToFile: serialize exception", e)
-                promise.reject("GET_DATA_ERROR", e.message ?: "serialize failed", e)
-                return@runOnUiQueueThread
-            }
-
+            // Serialization and the file write both run on the background
+            // executor; the view copies strokes on its GL thread first.
             executor.execute {
+                val data: ByteArray? = try {
+                    view.serializeDrawing()
+                } catch (e: Exception) {
+                    android.util.Log.e("MobileInkModule", "persistEngineToFile: serialize exception", e)
+                    promise.reject("GET_DATA_ERROR", e.message ?: "serialize failed", e)
+                    return@execute
+                }
                 try {
                     val body = if (data != null && data.isNotEmpty()) {
                         val base64 = Base64.encodeToString(data, Base64.NO_WRAP)

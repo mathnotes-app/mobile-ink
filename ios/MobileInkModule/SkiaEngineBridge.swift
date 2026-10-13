@@ -229,3 +229,10 @@ func commitExternalEdit(_ engine: OpaquePointer, _ before: UnsafePointer<CChar>,
 func undoExternalEdit(_ engine: OpaquePointer) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("redoExternalEdit")
 func redoExternalEdit(_ engine: OpaquePointer) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("snapshotDrawing")
+func snapshotDrawing(_ engine: OpaquePointer) -> OpaquePointer?
+@_silgen_name("serializeDrawingSnapshot")
+func serializeDrawingSnapshot(_ snapshot: OpaquePointer, _ outSize: UnsafeMutablePointer<Int32>) -> UnsafeMutablePointer<UInt8>?
+@_silgen_name("freeDrawingSnapshot")
+func freeDrawingSnapshot(_ snapshot: OpaquePointer)

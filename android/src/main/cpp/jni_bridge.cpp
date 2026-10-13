@@ -24,6 +24,7 @@
 #include <src/gpu/ganesh/gl/GrGLDefines.h>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -808,6 +809,7 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_isEmpty(JNIEnv* env, jobject ob
 }
 
 // Serialization
+// Synchronous GL-thread serialization, used to preserve ink across engine resizes.
 JNIEXPORT jbyteArray JNICALL
 Java_com_mathnotes_mobileink_MobileInkCanvasView_serializeDrawing(JNIEnv* env, jobject obj, jlong contextPtr) {
     auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
@@ -819,6 +821,47 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_serializeDrawing(JNIEnv* env, j
     }
     LOGE("serializeDrawing: ctx or engine is null!");
     return nullptr;
+}
+
+// Autosave copies strokes on the GL thread and encodes the copy elsewhere, so
+// neither the UI nor the GL thread waits for serialization.
+JNIEXPORT jlong JNICALL
+Java_com_mathnotes_mobileink_MobileInkCanvasView_snapshotDrawing(JNIEnv* env, jobject obj, jlong contextPtr) {
+    auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
+    if (!ctx || !ctx->engine) return 0;
+    try {
+        return reinterpret_cast<jlong>(new std::vector<nativedrawing::Stroke>(ctx->engine->snapshotDrawing()));
+    } catch (...) {
+        LOGE("snapshotDrawing: copy failed");
+        return 0;
+    }
+}
+
+JNIEXPORT jbyteArray JNICALL
+Java_com_mathnotes_mobileink_MobileInkCanvasView_serializeDrawingSnapshot(JNIEnv* env, jobject obj, jlong snapshotPtr) {
+    auto* strokes = reinterpret_cast<std::vector<nativedrawing::Stroke>*>(snapshotPtr);
+    if (!strokes) return nullptr;
+    try {
+        nativedrawing::DrawingSerialization serializer;
+        std::vector<uint8_t> data = serializer.serialize(*strokes);
+        if (data.size() > static_cast<size_t>(std::numeric_limits<jsize>::max())) {
+            LOGE("serializeDrawingSnapshot: payload exceeds JNI array limit");
+            return nullptr;
+        }
+        jbyteArray result = env->NewByteArray(static_cast<jsize>(data.size()));
+        if (!result || env->ExceptionCheck()) return nullptr;
+        env->SetByteArrayRegion(result, 0, static_cast<jsize>(data.size()), reinterpret_cast<const jbyte*>(data.data()));
+        if (env->ExceptionCheck()) return nullptr;
+        return result;
+    } catch (...) {
+        LOGE("serializeDrawingSnapshot: encoding failed");
+        return nullptr;
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_mathnotes_mobileink_MobileInkCanvasView_freeDrawingSnapshot(JNIEnv* env, jobject obj, jlong snapshotPtr) {
+    delete reinterpret_cast<std::vector<nativedrawing::Stroke>*>(snapshotPtr);
 }
 
 JNIEXPORT void JNICALL

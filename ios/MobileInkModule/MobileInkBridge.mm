@@ -27,6 +27,7 @@
 #pragma clang diagnostic pop
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <unordered_map>
 
@@ -601,24 +602,56 @@ void getSelectionBounds(void* engine, float* outBounds) {
     }
 }
 
-// Serialization operations
-uint8_t* serializeDrawing(void* engine, int* outSize) {
-    if (!engine || !outSize) {
-        *outSize = 0;
+// Copies serialized bytes into a buffer Swift frees with freeSerializedData.
+// Empty data yields nullptr with *outSize == 0; -1 marks a failure.
+static uint8_t* copyToSerializedBuffer(const std::vector<uint8_t>& data, int* outSize) {
+    if (data.size() > INT_MAX) {
+        *outSize = -1;
         return nullptr;
     }
-
-    std::vector<uint8_t> data = static_cast<SkiaDrawingEngine*>(engine)->serializeDrawing();
     *outSize = static_cast<int>(data.size());
-
-    if (data.empty()) {
-        return nullptr;
-    }
-
-    // Allocate buffer that Swift must free using freeSerializedData
+    if (data.empty()) return nullptr;
     uint8_t* buffer = new uint8_t[data.size()];
     std::memcpy(buffer, data.data(), data.size());
     return buffer;
+}
+
+// A snapshot owns its strokes independently of the view/engine lifetime. The UI
+// thread only copies state; serialization must not hold the live engine's lock.
+void* snapshotDrawing(void* engine) {
+    if (!engine) return nullptr;
+    try {
+        return new std::vector<nativedrawing::Stroke>(
+            static_cast<SkiaDrawingEngine*>(engine)->snapshotDrawing());
+    } catch (...) { return nullptr; }
+}
+
+uint8_t* serializeDrawingSnapshot(void* snapshot, int* outSize) {
+    if (!outSize) return nullptr;
+    *outSize = -1;
+    if (!snapshot) return nullptr;
+    try {
+        nativedrawing::DrawingSerialization serializer;
+        return copyToSerializedBuffer(
+            serializer.serialize(*static_cast<std::vector<nativedrawing::Stroke>*>(snapshot)), outSize);
+    } catch (...) {
+        *outSize = -1;
+        return nullptr;
+    }
+}
+
+void freeDrawingSnapshot(void* snapshot) {
+    delete static_cast<std::vector<nativedrawing::Stroke>*>(snapshot);
+}
+
+// Serialization operations
+uint8_t* serializeDrawing(void* engine, int* outSize) {
+    if (!outSize) return nullptr;
+    if (!engine) {
+        *outSize = 0;
+        return nullptr;
+    }
+    return copyToSerializedBuffer(static_cast<SkiaDrawingEngine*>(engine)->serializeDrawing(), outSize);
 }
 
 void freeSerializedData(uint8_t* data) {

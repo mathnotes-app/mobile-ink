@@ -852,6 +852,11 @@ void SkiaDrawingEngine::setTool(const char* toolType) {
     }
 }
 
+std::vector<Stroke> SkiaDrawingEngine::snapshotDrawing() {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+    return strokes_;
+}
+
 std::vector<uint8_t> SkiaDrawingEngine::serializeDrawing() {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
 

@@ -121,6 +121,8 @@ public:
 
     // Serialization
     std::vector<uint8_t> serializeDrawing();
+    // Copy committed strokes under the state lock; encode the independent copy off-thread.
+    std::vector<Stroke> snapshotDrawing();
     bool deserializeDrawing(const std::vector<uint8_t>& data);
 
     // State queries

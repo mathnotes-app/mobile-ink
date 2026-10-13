@@ -2,15 +2,11 @@ import React from 'react';
 import { act, render } from '@testing-library/react-native';
 import { ContinuousDocumentCanvas, type ContinuousDocumentCanvasRef } from '../ContinuousDocumentCanvas';
 
-const mockPartition = jest.fn(async () => ['first', 'second']);
 const mockLoad = jest.fn(async (_payloads: string[], _height: number) => true);
-const mockCapture = jest.fn(async () => 'document');
+const mockCapture = jest.fn(async (_count: number, _height: number) => ['first', 'second']);
 const mockClear = jest.fn();
 const mockRecordExternal = jest.fn(async () => true);
 let mockProps: any;
-jest.mock('../../native-ink-canvas/documentBridge', () => ({
-  partitionDocument: (...args: unknown[]) => (mockPartition as any)(...args),
-}));
 jest.mock('react-native-gesture-handler', () => ({ GestureHandlerRootView: require('react-native').View }));
 jest.mock('../PageStack', () => ({ PageBackgrounds: () => null, PageBreaks: () => null }));
 jest.mock('../../ZoomableInkViewport', () => ({ __esModule: true,
@@ -22,7 +18,7 @@ jest.mock('../../ZoomableInkViewport', () => ({ __esModule: true,
 jest.mock('../../NativeInkCanvas', () => ({
   NativeInkCanvas: require('react').forwardRef((props: any, ref: any) => {
     mockProps = props;
-    require('react').useImperativeHandle(ref, () => ({ loadDocument: mockLoad, getBase64Data: mockCapture,
+    require('react').useImperativeHandle(ref, () => ({ loadDocument: mockLoad, captureDocument: mockCapture,
       setTool: jest.fn(), clearDocumentPage: mockClear, recordExternalEdit: mockRecordExternal }));
     require('react').useEffect(() => { props.onCanvasReady(); }, [props.onCanvasReady]);
     return null;
@@ -47,18 +43,19 @@ it('retains blank pages and captures the whole document in order', async () => {
   act(() => mockProps.onDrawingChange());
   const result = await ref.current!.getNotebookData();
   expect(result.pages.map(p => p.data)).toEqual(['first', 'second']);
+  expect(mockCapture).toHaveBeenCalledWith(2, 1000 * require('react-native').PixelRatio.get());
   expect(result.originalCanvasWidth).toBe(600);
   tree.unmount();
 });
 it('rejects a save whose document changed during native capture', async () => {
   const { ref, tree } = await setup();
-  let resolve!: (value: string) => void;
-  mockCapture.mockImplementationOnce(() => new Promise<string>(done => { resolve = done; }));
+  let resolve!: (value: string[]) => void;
+  mockCapture.mockImplementationOnce(() => new Promise<string[]>(done => { resolve = done; }));
   act(() => mockProps.onDrawingChange());
   const save = ref.current!.getNotebookData();
   mockProps.onDrawingChange();
-  resolve('document');
-  await expect(save).rejects.toThrow('Document changed');
+  resolve(['first', 'second']);
+  await expect(save).rejects.toBeInstanceOf(require('../ContinuousDocumentCanvas').DocumentChangedDuringCaptureError);
   tree.unmount();
 });
 it('uses point coordinates for the drawing owner and native coordinates for page clear', async () => {
@@ -94,7 +91,7 @@ it('adds one trailing blank page after writing on the last page without growing 
     mockProps.onDrawingChange();
     mockProps.onDrawingChange();
   });
-  mockPartition.mockResolvedValueOnce(['first', 'second', '{"pages":{}}']);
+  mockCapture.mockResolvedValueOnce(['first', 'second', '{"pages":{}}']);
   const saved = await ref.current!.getNotebookData();
   expect(saved.pages).toHaveLength(3);
   expect(saved.pages[0].id).toBe('a');

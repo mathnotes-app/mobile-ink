@@ -4,14 +4,13 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NativeInkCanvas, type NativeInkCanvasRef } from '../NativeInkCanvas';
 import ZoomableInkViewport, { type ZoomableInkViewportRef, type TouchExclusionRect } from '../ZoomableInkViewport';
 import { waitForNextFrame } from '../continuous-engine-pool/helpers';
-import { partitionDocument } from '../native-ink-canvas/documentBridge';
 import type { NotebookPage, SerializedNotebookData } from '../types';
 import type { InfiniteInkCanvasProps, InfiniteInkCanvasRef, InfiniteInkViewportTransform } from './types';
 import { DEFAULT_CONTENT_PADDING, DEFAULT_PAGE_HEIGHT, DEFAULT_PAGE_WIDTH } from './constants';
 import { clonePage, getVisiblePageIndex, parseNotebookData } from './notebookPages';
 import { createBlankPage, BLANK_PAGE_PAYLOAD, pageHasContent, pageHasPdfBackground } from '../utils/pageGrowth';
-import { getVisibleContentRect, getRevealTranslateY, getRevealTargetScreenY } from '../utils/viewportTransform';
-import { quantizeNativeRenderScale } from '../utils/nativeRenderScale';
+import { getRevealTranslateY, getRevealTargetScreenY } from '../utils/viewportTransform';
+import { resolveDocumentRenderTarget, type DocumentRenderTarget } from '../utils/documentRenderTarget';
 import { computeDataSignature } from '../utils/dataSignature';
 import { PageBackgrounds, PageBreaks } from './PageStack';
 import { selectionBoundsToTouchRect } from './selectionTouchRects';
@@ -26,6 +25,21 @@ export type ContinuousDocumentCanvasProps = InfiniteInkCanvasProps & {
   /** Called after the corresponding ink/overlay update has been delivered. */
   onHistoryAction?: (action: "undo" | "redo") => void;
 };
+
+/**
+ * A save was superseded: ink or pages changed while it captured. Nothing is
+ * wrong with the document; the change that superseded it should save again.
+ */
+export class DocumentChangedDuringCaptureError extends Error {
+  constructor() {
+    super('Document changed during capture; retry saving its current state');
+    this.name = 'DocumentChangedDuringCaptureError';
+  }
+}
+
+/** Checks by name so it also holds when Error subclasses are transpiled. */
+export const isDocumentCaptureSuperseded = (error: unknown): boolean =>
+  error instanceof Error && error.name === 'DocumentChangedDuringCaptureError';
 
 // Page payloads retain whole crossing strokes and global drawing order. All
 // pages are captured together; committing a dirty subset would corrupt order.
@@ -54,7 +68,14 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
   const appendAfterStroke = useRef(false);
   const dirtyPages = useRef(new Set<string>());
   const [visiblePage, setVisiblePage] = useState(0);
-  const [transform, setTransform] = useState<InfiniteInkViewportTransform | null>(null);
+  // Viewport updates arrive every frame; only a changed render target may
+  // re-render this tree or the native surface (see resolveDocumentRenderTarget).
+  const transformRef = useRef<InfiniteInkViewportTransform | null>(null);
+  const isMoving = useRef(false);
+  const renderLayout = useCallback(() => ({ pageWidth, pageHeight, pageCount: pagesRef.current.length, contentPadding }),
+    [contentPadding, pageHeight, pageWidth]);
+  const [renderTarget, setRenderTarget] = useState<DocumentRenderTarget>(
+    () => resolveDocumentRenderTarget(null, null, renderLayout(), false));
   const [selectionRects, setSelectionRects] = useState<TouchExclusionRect[]>([]);
   const documentHeight = pages.length * pageHeight;
   const density = PixelRatio.get();
@@ -131,11 +152,9 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
       return { ...snapshot, pages: snapshot.pages.map(page => ({ ...page })) };
     }
     const source = pagesRef.current;
-    const payload = await native.getBase64Data();
-    if (!payload) throw new Error('Native document serialization returned no data');
-    const partitions = await partitionDocument(payload, source.length, pageHeight * density);
+    const partitions = await native.captureDocument(source.length, pageHeight * density);
     if (!mounted.current || !ready.current || native !== canvas.current || version !== revision.current || source !== pagesRef.current)
-      throw new Error('Document changed during capture; retry saving its current state');
+      throw new DocumentChangedDuringCaptureError();
     if (partitions.length !== source.length) throw new Error('Incomplete document partition');
     const capturedPages = source.map((page, i) => ({ ...page, data: partitions[i], dataSignature: computeDataSignature(partitions[i]),
       previewUri: undefined, previewDataSignature: undefined }));
@@ -188,34 +207,41 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
       return canvas.current.stopBenchmarkRecording();
     },
   }), [addPage, capture, contentPadding, density, load, pageHeight, scrollToPage]);
+  const updateRenderTarget = useCallback(() => {
+    const layout = renderLayout();
+    setRenderTarget(previous => resolveDocumentRenderTarget(previous, transformRef.current, layout, isMoving.current));
+  }, [renderLayout]);
+  useEffect(updateRenderTarget, [pages.length, updateRenderTarget]);
+  const onMotionStateChange = useCallback((moving: boolean) => {
+    isMoving.current = moving;
+    updateRenderTarget();
+    callbacks.current.onMotionStateChange?.(moving);
+  }, [updateRenderTarget]);
   const onTransform = useCallback((next: InfiniteInkViewportTransform) => {
-    setTransform(next);
+    transformRef.current = next;
+    updateRenderTarget();
     const index = getVisiblePageIndex(next, pageHeight, pagesRef.current.length, contentPadding);
     if (index !== currentPage.current) {
       currentPage.current = index; setVisiblePage(index);
       callbacks.current.onCurrentPageChange?.(index);
     }
     callbacks.current.onTransformChange?.(next);
-  }, [contentPadding, pageHeight]);
-  const rect = transform ? getVisibleContentRect(transform) : { left: 0, top: 0, width: pageWidth, height: pageHeight };
-  const left = Math.max(0, rect.left - ((transform?.containerWidth ?? pageWidth) - pageWidth) / 2);
-  const top = Math.max(0, Math.min(documentHeight - 1, rect.top - contentPadding));
+  }, [contentPadding, pageHeight, updateRenderTarget]);
   return <GestureHandlerRootView style={[styles.root, props.style]}>
     <ZoomableInkViewport ref={viewport} style={styles.viewport} minScale={props.minScale ?? 1} maxScale={props.maxScale ?? 5}
       contentWidth={pageWidth} contentHeight={documentHeight} contentPadding={contentPadding} isLandscape
       fingerDrawingEnabled={props.fingerDrawingEnabled} enableMomentumScroll lockHorizontalPanNearFit
       blockedTouchRects={selectionRects} singleFingerPanBlocked={selectionRects.length > 0}
       transformNotificationMinIntervalMs={props.transformNotificationMinIntervalMs ?? 16}
-      onTransformChange={onTransform} onMotionStateChange={props.onMotionStateChange}>
+      onTransformChange={onTransform} onMotionStateChange={onMotionStateChange}>
       <View style={[styles.canvasShell, { paddingTop: contentPadding, paddingBottom: contentPadding }]}>
         <View testID="continuous-document-input" pointerEvents={inputReady ? "auto" : "none"} style={{ width: pageWidth, height: documentHeight }}>
           <PageBackgrounds pages={pages} pageWidth={pageWidth} pageHeight={pageHeight} backgroundType={props.backgroundType ?? 'plain'}
             pdfBackgroundBaseUri={props.pdfBackgroundBaseUri} visiblePageIndex={visiblePage} showPageLabels={props.showPageLabels ?? true} />
           <NativeInkCanvas ref={canvas} style={StyleSheet.absoluteFillObject} continuousDocument backgroundType="pdf"
-            renderBackend={props.renderBackend} renderScale={quantizeNativeRenderScale(transform?.scale ?? 1, 5)}
-            renderViewportLeftRatio={left / pageWidth} renderViewportTopRatio={top / documentHeight}
-            renderViewportWidthRatio={Math.max(1, Math.min(pageWidth - left, rect.width)) / pageWidth}
-            renderViewportHeightRatio={Math.max(1, Math.min(documentHeight - top, rect.height)) / documentHeight}
+            renderBackend={props.renderBackend} renderScale={renderTarget.renderScale}
+            renderViewportLeftRatio={renderTarget.leftRatio} renderViewportTopRatio={renderTarget.topRatio}
+            renderViewportWidthRatio={renderTarget.widthRatio} renderViewportHeightRatio={renderTarget.heightRatio}
             drawingPolicy={props.fingerDrawingEnabled ? 'anyinput' : 'pencilonly'} onCanvasReady={onReady}
             onDrawingBegin={event => {
               revision.current++;
@@ -245,7 +271,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
             }}
             onSelectionChange={({ nativeEvent: { count, bounds } }) => {
               const touchRect = selectionBoundsToTouchRect({ bounds: bounds ?? null, pageIndex: 0, pageWidth, pageHeight,
-                contentPadding, containerWidth: transform?.containerWidth ?? pageWidth });
+                contentPadding, containerWidth: transformRef.current?.containerWidth ?? pageWidth });
               setSelectionRects(count && touchRect ? [touchRect] : []);
               const index = bounds ? Math.max(0, Math.min(pagesRef.current.length - 1, Math.floor(bounds.y / pageHeight))) : currentPage.current;
               const page = pagesRef.current[index];

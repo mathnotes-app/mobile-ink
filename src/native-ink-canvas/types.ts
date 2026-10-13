@@ -46,6 +46,8 @@ export interface NativeInkCanvasRef {
   getBase64Data: () => Promise<string>;
   loadBase64Data: (base64String: string) => Promise<boolean>;
   loadDocument: (pagePayloads: string[], pageHeight: number) => Promise<boolean>;
+  /** Continuous canvases only: persistent page payloads, captured off the UI thread. */
+  captureDocument: (pageCount: number, pageHeight: number) => Promise<string[]>;
   /**
    * Eagerly release the heavy native state (~13 MB pixel buffer + the
    * C++ drawing engine + queued JS callbacks) without waiting for ARC.

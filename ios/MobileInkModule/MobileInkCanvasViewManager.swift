@@ -297,6 +297,15 @@ class MobileInkCanvasViewManager: RCTViewManager {
     }
   }
 
+  /// Main thread only. Returns an owned std::vector<Stroke>* for
+  /// MobileInkDocumentBridge.captureDocument, or nil if the view is missing.
+  @objc func takeDrawingSnapshot(_ node: NSNumber) -> UnsafeMutableRawPointer? {
+    guard let container = bridge.uiManager.view(forReactTag: node),
+          let view = findDrawingView(container),
+          let snapshot = view.takeDrawingSnapshot() else { return nil }
+    return UnsafeMutableRawPointer(snapshot)
+  }
+
   @objc func loadBase64Data(_ node: NSNumber, base64String: String, callback: @escaping RCTResponseSenderBlock) {
     DispatchQueue.main.async {
       if let container = self.bridge.uiManager.view(forReactTag: node),

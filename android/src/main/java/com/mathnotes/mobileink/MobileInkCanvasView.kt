@@ -1334,10 +1334,39 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         return result
     }
 
+    /**
+     * Copies the committed strokes on the GL thread and returns an owned
+     * native snapshot (0 if unavailable). The caller must pass a nonzero
+     * handle to [releaseDrawingSnapshot]. Encoding the copy off the UI and GL
+     * threads keeps autosave from blocking touch input and rendering.
+     */
+    fun takeDrawingSnapshot(): Long {
+        if (drawingEngine == 0L) return 0L
+        // 0 = pending, CLAIMED = the caller stopped waiting. Whichever side
+        // loses the race frees the snapshot, so a timeout cannot leak it.
+        val slot = java.util.concurrent.atomic.AtomicLong(0L)
+        runOnGlThreadSync<Unit>(3000) {
+            if (drawingEngine != 0L) {
+                val handle = snapshotDrawing(drawingEngine)
+                if (handle != 0L && !slot.compareAndSet(0L, handle)) freeDrawingSnapshot(handle)
+            }
+            Unit
+        }
+        return slot.getAndSet(SNAPSHOT_CLAIMED)
+    }
+
+    fun releaseDrawingSnapshot(snapshot: Long) {
+        if (snapshot != 0L) freeDrawingSnapshot(snapshot)
+    }
+
+    /** Serializes a snapshot on the calling thread; call off the UI thread. */
     fun serializeDrawing(): ByteArray? {
-        if (drawingEngine == 0L) return null
-        return runOnGlThreadSync(3000) {
-            if (drawingEngine != 0L) serializeDrawing(drawingEngine) else null
+        val handle = takeDrawingSnapshot()
+        if (handle == 0L) return null
+        return try {
+            serializeDrawingSnapshot(handle)
+        } finally {
+            releaseDrawingSnapshot(handle)
         }
     }
 
@@ -1467,6 +1496,9 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
 
     // Serialization
     private external fun serializeDrawing(engine: Long): ByteArray?
+    private external fun snapshotDrawing(engine: Long): Long
+    private external fun serializeDrawingSnapshot(snapshot: Long): ByteArray?
+    private external fun freeDrawingSnapshot(snapshot: Long)
     private external fun deserializeDrawing(engine: Long, data: ByteArray)
 
     // Rendering
@@ -1475,6 +1507,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     private external fun renderToPixelsScaled(engine: Long, bitmap: Bitmap, scale: Float)
 
     companion object {
+        private const val SNAPSHOT_CLAIMED = -1L
         private var libraryLoaded = false
 
         @Synchronized
