@@ -85,7 +85,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
             else surfaceTexture?.let { if (isAvailable) configureAvailableTexture(it, width, height) }
         }
     private val effectiveRenderScale: Float
-        get() = floatArrayOf(1f, 1.5f, 2f, 2.5f, 3f, 4f, 5f).minByOrNull { kotlin.math.abs(it - renderScale) } ?: 1f
+        get() = floatArrayOf(0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 2.5f, 3f, 4f, 5f).minByOrNull { kotlin.math.abs(it - renderScale) } ?: 1f
 
     private fun continuousViewport(w: Int = width, h: Int = height): RectF {
         val left = renderViewportLeftRatio * w
@@ -108,7 +108,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
 
     var renderScale: Float = 1f
         set(value) {
-            val clamped = value.takeIf { it.isFinite() }?.coerceIn(1f, 5f) ?: 1f
+            val clamped = value.takeIf { it.isFinite() }?.coerceIn(0.25f, 5f) ?: 1f
             if (field == clamped) return
             field = clamped
             surfaceTexture?.let { texture ->
@@ -479,9 +479,9 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         )
 
         val actualRenderScale = if (continuousDocument) effectiveRenderScale else if (renderWidth > 0 && engineWidth > 0) {
-            (renderWidth.toFloat() / engineWidth.toFloat()).coerceIn(1f, 5f)
+            (renderWidth.toFloat() / engineWidth.toFloat()).coerceIn(0.25f, 5f)
         } else {
-            renderScale.coerceIn(1f, 5f)
+            renderScale.coerceIn(0.25f, 5f)
         }
 
         val continuous = if (continuousDocument) continuousViewport(engineWidth, engineHeight) else null

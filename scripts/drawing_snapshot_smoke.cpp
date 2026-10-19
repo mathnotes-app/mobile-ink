@@ -3,6 +3,7 @@
 // like the live engine and must not observe strokes drawn after it was taken.
 
 #include <iostream>
+#include <chrono>
 #include <thread>
 
 #include "../cpp/DrawingSerialization.h"
@@ -58,11 +59,33 @@ void snapshotIgnoresLaterStrokes() {
   check(engine.serializeDrawing() != before, "live engine lost strokes drawn after capture");
 }
 
+void denseSnapshotKeepsNewInputIndependent() {
+  SkiaDrawingEngine engine(820, 106100, true);
+  for (int page = 0; page < 100; ++page)
+    for (int stroke = 0; stroke < 200; ++stroke)
+      drawStroke(engine, page * 1061.0f + 20 + stroke * 4.0f);
+  const auto start = std::chrono::steady_clock::now();
+  const auto snapshot = engine.snapshotDrawing();
+  const auto captured = std::chrono::steady_clock::now();
+  std::vector<uint8_t> encoded;
+  std::thread writer([&] { DrawingSerialization serializer; encoded = serializer.serialize(snapshot); });
+  for (int stroke = 0; stroke < 24; ++stroke) drawStroke(engine, 200 + stroke * 20);
+  writer.join();
+  std::vector<Stroke> decoded;
+  DrawingSerialization serializer;
+  check(serializer.deserialize(encoded, decoded), "dense save cannot be decoded");
+  check(decoded.size() == 20000, "background encoding changed its captured revision");
+  check(engine.snapshotDrawing().size() == 20024, "drawing during dense save lost new input");
+  std::cout << "Dense UI-thread snapshot ms: "
+    << std::chrono::duration<double, std::milli>(captured - start).count() << std::endl;
+}
+
 }  // namespace
 
 int main() {
   snapshotEncodesLikeLiveEngine();
   snapshotIgnoresLaterStrokes();
+  denseSnapshotKeepsNewInputIndependent();
   if (g_failures == 0) {
     std::cout << "Drawing snapshot smoke tests passed" << std::endl;
     return 0;

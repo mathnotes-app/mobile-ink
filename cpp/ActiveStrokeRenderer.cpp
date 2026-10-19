@@ -64,7 +64,7 @@ void ActiveStrokeRenderer::ensureViewportAlignment(const ActiveStrokeViewport& v
 
     float nextOriginX = 0.0f;
     float nextOriginY = 0.0f;
-    if (viewportOnly_ || nextScale > kIdentityRenderScaleThreshold) {
+    if (viewportOnly_ || std::fabs(nextScale - 1.0f) > 0.01f) {
         const float coveredWidth = std::min(static_cast<float>(logicalWidth_), static_cast<float>(nextWidth) / nextScale);
         const float coveredHeight = std::min(static_cast<float>(logicalHeight_), static_cast<float>(nextHeight) / nextScale);
         nextOriginX = std::clamp(
@@ -271,7 +271,7 @@ void ActiveStrokeRenderer::drawSnapshot(SkCanvas* canvas) const {
         return;
     }
 
-    if (viewportScale_ <= kIdentityRenderScaleThreshold) {
+    if (std::fabs(viewportScale_ - 1.0f) <= 0.01f) {
         canvas->drawImage(cachedActiveSnapshot_, viewportOriginX_, viewportOriginY_);
         return;
     }

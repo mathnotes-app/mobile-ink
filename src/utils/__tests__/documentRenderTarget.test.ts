@@ -86,3 +86,13 @@ describe('continuous document render target', () => {
     expect(resolveDocumentRenderTarget(first, transform, bad, false)).toBe(first);
   });
 });
+
+
+it('renders a four-page overview inside the native drawable cap', () => {
+  const target = resolveDocumentRenderTarget(null, { scale: 0.25, translateX: 0, translateY: 0,
+    containerWidth: 1024, containerHeight: 1366 },
+    { pageWidth: 1024, pageHeight: 1325, pageCount: 100, contentPadding: 0, pixelRatio: 2 }, false);
+  expect(target.renderScale).toBe(0.25);
+  expect(target.heightRatio * 132500 * target.renderScale * 2).toBeLessThanOrEqual(4000);
+  expect(target.heightRatio * 132500).toBeGreaterThan(4000);
+});

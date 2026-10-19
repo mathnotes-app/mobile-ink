@@ -76,16 +76,18 @@ class MobileInkCanvasView: MTKView {
     private var enginePixelHeight: Int32 = 0
     private var isApplyingDrawableSize = false
     private var clampedRenderScale: CGFloat {
-        let requested = max(1.0, min(5.0, renderScale.isFinite ? renderScale : 1.0))
-        return [CGFloat(1), 1.5, 2, 2.5, 3, 4, 5].min { abs($0 - requested) < abs($1 - requested) } ?? 1
+        let requested = max(0.25, min(5.0, renderScale.isFinite ? renderScale : 1.0))
+        return [CGFloat(0.25), 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5].min { abs($0 - requested) < abs($1 - requested) } ?? 1
     }
 
     private var documentSize: CGSize = .zero
     private var renderGeometryUpdatePending = false
-    private var usesCroppedViewport: Bool { continuousDocument || clampedRenderScale > 1.01 }
+    private var usesCroppedViewport: Bool { continuousDocument || abs(clampedRenderScale - 1) > 0.01 }
 
     func updateDocumentLayout(_ size: CGSize) {
-        guard size.width > 0, size.height > 0 else { return }
+        let scale = baseContentScale()
+        guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0,
+              size.width * scale <= CGFloat(Int32.max), size.height * scale <= CGFloat(Int32.max) else { return }
         documentSize = size
         scheduleRenderGeometryUpdate()
     }
@@ -118,9 +120,26 @@ class MobileInkCanvasView: MTKView {
             }
             if self.frame != target { self.frame = target }
             self.applyDrawableContentScale(updateDrawableSize: true)
+            self.syncContinuousEngineDocumentSize()
             self.applyRenderViewportToEngine()
             self.updateSelectionToolbarFrame()
             self.requestDisplay(forceWhenSuspended: true)
+        }
+    }
+
+    // A growing document can keep exactly the same cropped drawable size.
+    // In that case MTKView does not call drawableSizeWillChange, so update
+    // the logical engine extent directly from the host document layout.
+    private func syncContinuousEngineDocumentSize() {
+        guard continuousDocument, let engine = drawingEngine,
+              documentSize.width > 0, documentSize.height > 0 else { return }
+        let scale = baseContentScale()
+        let width = Int32(max(1, round(documentSize.width * scale)))
+        let height = Int32(max(1, round(documentSize.height * scale)))
+        guard width != enginePixelWidth || height != enginePixelHeight else { return }
+        if resizeContinuousDrawingEngine(engine, width, height) {
+            enginePixelWidth = width
+            enginePixelHeight = height
         }
     }
 
@@ -1835,6 +1854,18 @@ extension MobileInkCanvasView: MTKViewDelegate {
             return
         }
 
+        // Cropping can resize the drawable without a delegate size callback.
+        // Keep the CPU upload buffer in step with the actual Metal drawable.
+        let currentWidth = Int32(drawableSize.width)
+        let currentHeight = Int32(drawableSize.height)
+        if currentWidth > 0, currentHeight > 0,
+           currentWidth != pixelWidth || currentHeight != pixelHeight {
+            pixelWidth = currentWidth
+            pixelHeight = currentHeight
+            if !useExperimentalGaneshBackend {
+                allocatePixelBuffer(width: Int(currentWidth), height: Int(currentHeight))
+            }
+        }
         let width = pixelWidth
         let height = pixelHeight
 

@@ -93,7 +93,11 @@ export function resolveDocumentRenderTarget(
   // Prefer the nearest bucket for crisp settled ink; the lower bucket always
   // fits because its visible pixels never exceed the screen's.
   const zoom = transform?.scale ?? 1;
-  const nearestScale = nearestNativeRenderScale(zoom, maxRenderScale);
+  // Overview renders at screen density instead of allocating full-resolution
+  // pixels for several pages and truncating them at the native drawable cap.
+  const overviewScale = [0.25, 0.5, 0.75, 1].reduce((best, value) =>
+    value <= zoom + 0.001 ? value : best, 0.25);
+  const nearestScale = zoom < 1 ? overviewScale : nearestNativeRenderScale(zoom, maxRenderScale);
   const settledScale = fitsPixelCap(visible, nearestScale, pixelRatio)
     ? nearestScale : quantizeNativeRenderScale(zoom, maxRenderScale);
   const scale = isMoving && previous && fitsPixelCap(visible, previous.renderScale, pixelRatio)

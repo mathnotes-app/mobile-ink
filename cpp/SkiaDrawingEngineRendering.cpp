@@ -8,6 +8,7 @@
 #include "ShapeRecognition.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <utility>
 
@@ -224,7 +225,7 @@ void SkiaDrawingEngine::renderActiveContent(SkCanvas* canvas) {
 void SkiaDrawingEngine::render(SkCanvas* canvas) {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
 
-    const bool useScaleAwarePath = viewportOnly_ || renderScale_ > kIdentityRenderScaleThreshold;
+    const bool useScaleAwarePath = viewportOnly_ || std::fabs(renderScale_ - 1.0f) > 0.01f;
 
     if (useScaleAwarePath) {
         if (backgroundType_ == "pdf") {

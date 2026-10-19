@@ -331,7 +331,7 @@ private:
         const SkPaint& paint
     );
     const void* strokeTileContext_ = nullptr;
-    sk_sp<SkImage> renderStrokeTile(SkCanvas* targetCanvas, const StrokeTileKey& key, int tileWidth, int tileHeight, float scale);
+    sk_sp<SkImage> renderStrokeTile(SkCanvas* targetCanvas, const StrokeTileKey& key, int tileWidth, int tileHeight, float scale, const std::vector<size_t>& candidates);
     void pruneStrokeTileCache();
 
     // Pixel eraser stroke splitting - splits a stroke by removing portions that intersect the eraser

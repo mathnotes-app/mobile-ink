@@ -2,6 +2,13 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [0.3.10] - 2026-10-19
+
+- Support continuous-document overview rendering down to 25% zoom without truncating later pages at the native drawable limit.
+- Collect visible stroke candidates once per tile-render batch, preserving complete cached tiles for subsequent pans instead of scanning the entire notebook for each tile.
+- Keep iOS document extent and CPU upload buffers synchronized when a document grows or its crop changes without a Metal drawable-size callback.
+- Extend native checks for drawing on new pages, overview live input, partially visible tile reuse, and new strokes received while a dense notebook snapshot is encoded.
+
 ## [0.3.9] - 2026-10-13
 
 - Saving no longer blocks pen input. iOS and Android copy the strokes on the drawing thread and serialize, base64-encode, and wrap the copy on a background thread. Previously the whole document was serialized on the UI (iOS main / Android GL) thread on every autosave, delaying strokes drawn during a save on dense notebooks.
