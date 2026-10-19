@@ -22,6 +22,8 @@ final class MobileInkBenchmarkRecorder {
   private var presentIntervalsMs: [Double] = []
   private var presentationPauseDurationsMs: [Double] = []
   private var inputToPresentLatenciesMs: [Double] = []
+  private var heartbeat: DispatchSourceTimer?
+  private var mainQueueDelaysMs: [Double] = []
   private var renderFrameCount = 0
   private var cpuFrameCount = 0
   private var ganeshFrameCount = 0
@@ -60,12 +62,16 @@ final class MobileInkBenchmarkRecorder {
     self.memoryPeakBytes = memoryStartBytes
     self.memoryLowBytes = memoryStartBytes
     self.isRunning = true
+    mainQueueDelaysMs.removeAll(keepingCapacity: true)
+    startMainQueueHeartbeat()
   }
 
   func finish() -> [String: Any] {
     sampleMemory()
     endTime = CACurrentMediaTime()
     isRunning = false
+    heartbeat?.cancel()
+    heartbeat = nil
     return summary()
   }
 
@@ -154,6 +160,8 @@ final class MobileInkBenchmarkRecorder {
       "syntheticStrokeCount": syntheticStrokeCount,
       "syntheticPointCount": syntheticPointCount,
       "renderMs": distribution(renderDurationsMs),
+      "mainQueueDelayMs": distribution(mainQueueDelaysMs),
+      "mainQueueStallCount": mainQueueDelaysMs.filter { $0 >= 100 }.count,
       "frameIntervalMs": distribution(presentIntervalsMs),
       "presentationPauseMs": distribution(presentationPauseDurationsMs),
       "presentationPauseCount": presentationPauseDurationsMs.count,
@@ -168,6 +176,50 @@ final class MobileInkBenchmarkRecorder {
         "peakDeltaBytes": Int64(memoryPeakBytes) - Int64(memoryStartBytes),
       ],
     ]
+  }
+
+  deinit { heartbeat?.cancel() }
+
+  // One pending probe at a time: a stalled main queue cannot accumulate work.
+  // The background handler never reads mutable recorder state.
+  private func startMainQueueHeartbeat() {
+    heartbeat?.cancel()
+    let token = sessionId
+    let pending = DispatchSemaphore(value: 1)
+    let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInitiated))
+    timer.schedule(deadline: .now(), repeating: .milliseconds(20), leeway: .milliseconds(1))
+    timer.setEventHandler { [weak self] in
+      guard pending.wait(timeout: .now()) == .success else { return }
+      let enqueuedAt = CACurrentMediaTime()
+      DispatchQueue.main.async { [weak self] in
+        defer { pending.signal() }
+        guard let self, self.isRunning, self.sessionId == token else { return }
+        self.mainQueueDelaysMs.append((CACurrentMediaTime() - enqueuedAt) * 1000)
+      }
+    }
+    heartbeat = timer
+    timer.resume()
+  }
+
+  // Only unattended native audits opt into disk output. Reports contain timing
+  // and memory counters, never strokes, filenames, text, or other note content.
+  static func writeAutomaticAudit(_ summary: [String: Any]) {
+    do {
+      let data = try JSONSerialization.data(withJSONObject: summary, options: [.sortedKeys])
+      let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("MobileInkAudits", isDirectory: true)
+      let file = directory.appendingPathComponent(UUID().uuidString + ".json")
+      DispatchQueue.global(qos: .utility).async {
+        do {
+          try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+          try data.write(to: file, options: .atomic)
+        } catch {
+          NSLog("[MobileInkAudit] Could not save timing report: %@", String(describing: error))
+        }
+      }
+    } catch {
+      NSLog("[MobileInkAudit] Could not encode timing report: %@", String(describing: error))
+    }
   }
 
   private func sampleMemory() {

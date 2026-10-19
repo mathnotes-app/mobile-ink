@@ -60,6 +60,7 @@ class MobileInkCanvasView: MTKView {
     private var ganeshMetalContext: OpaquePointer?
     var requestedRenderBackend: MobileInkRenderBackend = .ganesh
     var benchmarkRecorder = MobileInkBenchmarkRecorder()
+    private var automaticBenchmarkStarted = false
     var isBenchmarkReplayRunning = false
     var benchmarkRunToken = UUID()
     private var useExperimentalGaneshBackend: Bool {
@@ -356,6 +357,12 @@ class MobileInkCanvasView: MTKView {
     func releaseHeavyNativeState() {
         if isReleased { return }
         isReleased = true
+        if automaticBenchmarkStarted {
+            let recorder = benchmarkRecorder
+            let finishAudit = { MobileInkBenchmarkRecorder.writeAutomaticAudit(recorder.finish()) }
+            if Thread.isMainThread { finishAudit() }
+            else { DispatchQueue.main.async(execute: finishAudit) }
+        }
 
         benchmarkRunToken = UUID()
         isBenchmarkReplayRunning = false
@@ -1852,6 +1859,15 @@ extension MobileInkCanvasView: MTKViewDelegate {
     func draw(in view: MTKView) {
         guard let engine = drawingEngine else {
             return
+        }
+
+        if !automaticBenchmarkStarted,
+           ProcessInfo.processInfo.environment["MOBILE_INK_AUDIT"] == "1" {
+            automaticBenchmarkStarted = true
+            benchmarkRecorder.start(
+                scenario: ProcessInfo.processInfo.environment["MOBILE_INK_AUDIT_SCENARIO"] ?? "native-interaction",
+                requestedBackend: requestedRenderBackend.rawValue
+            )
         }
 
         // Cropping can resize the drawable without a delegate size callback.

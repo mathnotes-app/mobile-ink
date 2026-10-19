@@ -43,6 +43,9 @@ jobs:
       - name: Test release automation
         run: npm run test:release
 
+      - name: Detect and reset native main-queue stalls
+        run: npm run test:native:heartbeat-smoke
+
       - name: Run native serialization smoke test
         run: npm run test:native:smoke
 
