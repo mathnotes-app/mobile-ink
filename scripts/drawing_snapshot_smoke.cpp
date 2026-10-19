@@ -80,12 +80,47 @@ void denseSnapshotKeepsNewInputIndependent() {
     << std::chrono::duration<double, std::milli>(captured - start).count() << std::endl;
 }
 
+void preparedDrawingHandoffPreservesContentAndResetsHistory() {
+  SkiaDrawingEngine source(820, 106100, true);
+  for (int stroke = 0; stroke < 20000; ++stroke)
+    drawStroke(source, 20 + stroke * 4.0f);
+  const auto bytes = source.serializeDrawing();
+  std::vector<Stroke> prepared;
+  DrawingSerialization serializer;
+  std::thread decoder([&] {
+    check(serializer.deserialize(bytes, prepared), "prepared drawing cannot be decoded");
+  });
+  decoder.join();
+  SkiaDrawingEngine destination(820, 106100, true);
+  drawStroke(destination, 400);
+  const auto old = destination.serializeDrawing();
+  const auto start = std::chrono::steady_clock::now();
+  destination.replaceDrawing(prepared);
+  const auto installed = std::chrono::steady_clock::now();
+  check(destination.serializeDrawing() == bytes, "prepared handoff changed decoded geometry");
+  check(serializer.serialize(prepared) == old, "handoff did not return old strokes to its owner");
+  check(!destination.canUndo() && !destination.canRedo(), "prepared load retained previous history");
+  drawStroke(destination, 200);
+  destination.undo();
+  check(destination.serializeDrawing() == bytes, "undo after prepared load changed loaded ink");
+  destination.redo();
+  check(destination.snapshotDrawing().size() == 20001, "redo after prepared load lost new ink");
+  std::vector<Stroke> empty;
+  destination.replaceDrawing(empty);
+  check(destination.isEmpty() && !destination.canUndo() && !destination.canRedo(),
+        "empty prepared load did not clear drawing and history");
+  check(empty.size() == 20001, "empty handoff did not return previous content");
+  std::cout << "Dense prepared drawing handoff ms: "
+    << std::chrono::duration<double, std::milli>(installed - start).count() << std::endl;
+}
+
 }  // namespace
 
 int main() {
   snapshotEncodesLikeLiveEngine();
   snapshotIgnoresLaterStrokes();
   denseSnapshotKeepsNewInputIndependent();
+  preparedDrawingHandoffPreservesContentAndResetsHistory();
   if (g_failures == 0) {
     std::cout << "Drawing snapshot smoke tests passed" << std::endl;
     return 0;

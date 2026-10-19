@@ -1231,6 +1231,26 @@ class MobileInkCanvasView: MTKView {
         requestDisplay(forceWhenSuspended: true)
     }
 
+    // Used only by the document bridge, which validates and builds geometry on
+    // its background queue. The pointer is borrowed for this synchronous swap.
+    func loadPreparedDrawing(_ snapshot: UnsafeMutableRawPointer, callback: @escaping RCTResponseSenderBlock) {
+        guard let engine = drawingEngine, !isReleased else {
+            callback([NSNull(), false])
+            return
+        }
+        guard replaceDrawingSnapshot(engine, snapshot) else {
+            callback(["Failed to install prepared drawing", NSNull()])
+            return
+        }
+        deferredBase64Payload = nil
+        hasDeferredPresentation = false
+        syncInteractionModeFlags()
+        resetTransientInteractionState()
+        applyPendingTool(to: engine)
+        notifySelectionChange()
+        enqueueLoadPresentationCallback(callback)
+    }
+
     @objc func loadBase64Data(_ base64String: String, callback: @escaping RCTResponseSenderBlock) {
         // React attaches the native view before its first layout creates the
         // engine. Report retryable readiness without treating valid ink as bad.

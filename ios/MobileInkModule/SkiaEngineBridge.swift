@@ -230,6 +230,9 @@ func undoExternalEdit(_ engine: OpaquePointer) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("redoExternalEdit")
 func redoExternalEdit(_ engine: OpaquePointer) -> UnsafeMutablePointer<CChar>?
 
+@_silgen_name("replaceDrawingSnapshot")
+func replaceDrawingSnapshot(_ engine: OpaquePointer, _ snapshot: UnsafeMutableRawPointer) -> Bool
+
 @_silgen_name("snapshotDrawing")
 func snapshotDrawing(_ engine: OpaquePointer) -> OpaquePointer?
 @_silgen_name("serializeDrawingSnapshot")

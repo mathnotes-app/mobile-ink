@@ -124,6 +124,8 @@ public:
     // Copy committed strokes under the state lock; encode the independent copy off-thread.
     std::vector<Stroke> snapshotDrawing();
     bool deserializeDrawing(const std::vector<uint8_t>& data);
+    // Swap already decoded geometry into the engine; caller retains old strokes.
+    void replaceDrawing(std::vector<Stroke>& preparedStrokes);
 
     // State queries
     bool canUndo() const;

@@ -306,6 +306,16 @@ class MobileInkCanvasViewManager: RCTViewManager {
     return UnsafeMutableRawPointer(snapshot)
   }
 
+  // Called synchronously on the main queue while the bridge owns the pointer.
+  @objc func loadPreparedDrawing(_ node: NSNumber, snapshot: UnsafeMutableRawPointer, callback: @escaping RCTResponseSenderBlock) {
+    guard let container = bridge.uiManager.view(forReactTag: node),
+          let view = findDrawingView(container) else {
+      callback([NSNull(), false])
+      return
+    }
+    view.loadPreparedDrawing(snapshot, callback: callback)
+  }
+
   @objc func loadBase64Data(_ node: NSNumber, base64String: String, callback: @escaping RCTResponseSenderBlock) {
     DispatchQueue.main.async {
       if let container = self.bridge.uiManager.view(forReactTag: node),

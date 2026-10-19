@@ -626,6 +626,17 @@ void* snapshotDrawing(void* engine) {
     } catch (...) { return nullptr; }
 }
 
+// The caller owns the vector before and after this swap. It can release the
+// previous drawing off-thread after the main-thread handoff completes.
+bool replaceDrawingSnapshot(void* engine, void* snapshot) {
+    if (!engine || !snapshot) return false;
+    try {
+        static_cast<SkiaDrawingEngine*>(engine)->replaceDrawing(
+            *static_cast<std::vector<nativedrawing::Stroke>*>(snapshot));
+        return true;
+    } catch (...) { return false; }
+}
+
 uint8_t* serializeDrawingSnapshot(void* snapshot, int* outSize) {
     if (!outSize) return nullptr;
     *outSize = -1;

@@ -4,8 +4,8 @@ All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
 ## [0.3.10] - 2026-10-19
 
+- Decode continuous notebooks once on the iOS background queue and hand prepared geometry to the canvas, avoiding combined-document base64 encoding and main-thread decoding on open.
 - Add opt-in native audit reports with independent main-queue heartbeat delays, render timing, and memory counters. Unattended UI tests can set `MOBILE_INK_AUDIT=1`; reports contain no drawing or note content and are written when the canvas releases.
-
 - Support continuous-document overview rendering down to 25% zoom without truncating later pages at the native drawable limit.
 - Collect visible stroke candidates once per tile-render batch, preserving complete cached tiles for subsequent pans instead of scanning the entire notebook for each tile.
 - Keep iOS document extent and CPU upload buffers synchronized when a document grows or its crop changes without a Metal drawable-size callback.
