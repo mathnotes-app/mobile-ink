@@ -8,6 +8,7 @@ All notable changes to `@mathnotes/mobile-ink` will be documented here.
 - Collect visible stroke candidates once per tile-render batch, preserving complete cached tiles for subsequent pans instead of scanning the entire notebook for each tile.
 - Keep iOS document extent and CPU upload buffers synchronized when a document grows or its crop changes without a Metal drawable-size callback.
 - Extend native checks for drawing on new pages, overview live input, partially visible tile reuse, and new strokes received while a dense notebook snapshot is encoded.
+- Let continuous-document hosts exclude selected overlay bodies and controls from viewport panning while keeping blank margins available for navigation.
 
 ## [0.3.9] - 2026-10-13
 

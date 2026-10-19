@@ -1,4 +1,4 @@
-import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { PixelRatio, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NativeInkCanvas, type NativeInkCanvasRef } from '../NativeInkCanvas';
@@ -22,6 +22,8 @@ export type ContinuousDocumentCanvasRef = InfiniteInkCanvasRef & {
 export type ContinuousDocumentCanvasProps = InfiniteInkCanvasProps & {
   /** Apply this host-owned overlay patch after a native undo/redo. */
   onExternalEdit?: (payload: string) => void;
+  /** Host overlay bodies/handles, in unscaled viewport-content coordinates. */
+  blockedTouchRects?: TouchExclusionRect[];
   /** Called after the corresponding ink/overlay update has been delivered. */
   onHistoryAction?: (action: "undo" | "redo") => void;
 };
@@ -77,6 +79,8 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
   const [renderTarget, setRenderTarget] = useState<DocumentRenderTarget>(
     () => resolveDocumentRenderTarget(null, null, renderLayout(), false));
   const [selectionRects, setSelectionRects] = useState<TouchExclusionRect[]>([]);
+  const blockedTouchRects = useMemo(() => [...selectionRects, ...(props.blockedTouchRects ?? [])],
+    [props.blockedTouchRects, selectionRects]);
   const documentHeight = pages.length * pageHeight;
   const density = PixelRatio.get();
   const report = useCallback((error: unknown) => {
@@ -231,7 +235,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
     <ZoomableInkViewport ref={viewport} style={styles.viewport} minScale={props.minScale ?? 1} maxScale={props.maxScale ?? 5}
       contentWidth={pageWidth} contentHeight={documentHeight} contentPadding={contentPadding} isLandscape
       fingerDrawingEnabled={props.fingerDrawingEnabled} enableMomentumScroll lockHorizontalPanNearFit
-      blockedTouchRects={selectionRects} singleFingerPanBlocked={selectionRects.length > 0}
+      blockedTouchRects={blockedTouchRects} singleFingerPanBlocked={selectionRects.length > 0}
       transformNotificationMinIntervalMs={props.transformNotificationMinIntervalMs ?? 16}
       onTransformChange={onTransform} onMotionStateChange={onMotionStateChange}>
       <View style={[styles.canvasShell, { paddingTop: contentPadding, paddingBottom: contentPadding }]}>
