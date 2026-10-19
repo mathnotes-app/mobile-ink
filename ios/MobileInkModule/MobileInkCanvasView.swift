@@ -63,7 +63,7 @@ class MobileInkCanvasView: MTKView {
     private var hasPresentedFrame = false
     var requestedRenderBackend: MobileInkRenderBackend = .ganesh
     let benchmarkRecorder: MobileInkBenchmarkRecorder
-    private var automaticBenchmarkStarted = false
+    private let interactionAudit: MobileInkInteractionAudit?
     var isBenchmarkReplayRunning = false
     var benchmarkRunToken = UUID()
     private var useExperimentalGaneshBackend: Bool {
@@ -186,6 +186,7 @@ class MobileInkCanvasView: MTKView {
             let normalizedBackend = MobileInkRenderBackend(rawValue: renderBackend.lowercased()) ?? .ganesh
             requestedRenderBackend = normalizedBackend
             benchmarkRecorder.updateRequestedBackend(normalizedBackend.rawValue)
+            interactionAudit?.updateRequestedBackend(normalizedBackend.rawValue)
             if normalizedBackend == .ganesh { _ = ensureGaneshMetalContext() }
 
             if normalizedBackend == .cpu {
@@ -280,15 +281,8 @@ class MobileInkCanvasView: MTKView {
         // Start before Metal/view construction so the audit includes cold-open
         // work, rather than beginning only once the first frame is ready.
         let recorder = MobileInkBenchmarkRecorder()
-        let auditEnabled = ProcessInfo.processInfo.environment["MOBILE_INK_AUDIT"] == "1"
-        if auditEnabled {
-            recorder.start(
-                scenario: ProcessInfo.processInfo.environment["MOBILE_INK_AUDIT_SCENARIO"] ?? "native-interaction",
-                requestedBackend: MobileInkRenderBackend.ganesh.rawValue
-            )
-        }
         self.benchmarkRecorder = recorder
-        self.automaticBenchmarkStarted = auditEnabled
+        self.interactionAudit = MobileInkInteractionAudit(recorder: recorder)
         let metalDevice = device ?? MTLCreateSystemDefaultDevice()
         super.init(frame: frame, device: metalDevice)
 
@@ -374,11 +368,9 @@ class MobileInkCanvasView: MTKView {
     func releaseHeavyNativeState() {
         if isReleased { return }
         isReleased = true
-        if automaticBenchmarkStarted {
-            let recorder = benchmarkRecorder
-            let finishAudit = { MobileInkBenchmarkRecorder.writeAutomaticAudit(recorder.finish()) }
-            if Thread.isMainThread { finishAudit() }
-            else { DispatchQueue.main.async(execute: finishAudit) }
+        if let audit = interactionAudit {
+            if Thread.isMainThread { audit.dispose() }
+            else { DispatchQueue.main.async { audit.dispose() } }
         }
 
         benchmarkRunToken = UUID()
@@ -1898,6 +1890,7 @@ extension MobileInkCanvasView: MTKViewDelegate {
                 if self?.isReleased != false { error = "Canvas released before load presentation" }
                 else if completed.status == .error { error = "Metal could not present the loaded drawing" }
                 else { error = nil }
+                if error == nil { self?.interactionAudit?.didPresentInitialLoad() }
                 loadCallbacks.forEach { callback in
                     if let error { callback([error, NSNull()]) }
                     else { callback([NSNull(), true]) }
