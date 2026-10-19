@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <include/gpu/ganesh/SkSurfaceGanesh.h>
 
 namespace nativedrawing {
 namespace {
@@ -110,7 +111,14 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
     const std::vector<size_t>& candidates
 ) {
     SkImageInfo info = SkImageInfo::MakeN32Premul(tileWidth, tileHeight);
-    sk_sp<SkSurface> tileSurface = targetCanvas->makeSurface(info);
+    // Coverage AA on a single-sample target can rasterize each pressure path
+    // into a separate CPU mask. Multisampled tiles let Ganesh tessellate those
+    // paths on the GPU; their snapshots are resolved single-sample images.
+    sk_sp<SkSurface> tileSurface;
+    if (auto* context = targetCanvas->recordingContext()) {
+        tileSurface = SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes, info, 4, nullptr);
+    }
+    if (!tileSurface) tileSurface = targetCanvas->makeSurface(info);
     if (!tileSurface) {
         tileSurface = SkSurfaces::Raster(info);
     }
