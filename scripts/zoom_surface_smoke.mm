@@ -89,6 +89,27 @@ int main() {
             live.setRenderViewport(1, 0, 0, 512, 512);
             expectInk(render(live, nullptr), 100, 100, true, "Starting a stroke erased committed ink");
         }
+        // Continuous live ink stays intact across incremental GPU updates,
+        // context changes, and CPU capture while a stroke is still in flight.
+        SkiaDrawingEngine continuousLive(512, 4096, true);
+        continuousLive.setToolWithParams("pen", 12, 0x000000, "pixel");
+        continuousLive.setRenderViewport(2, 0, 0, 256, 256);
+        continuousLive.touchBegan(24, 80, 1);
+        int tip = 24;
+        for (auto* context : {first.get(), first.get(), second.get(),
+                              static_cast<GrDirectContext*>(nullptr), first.get(), first.get()}) {
+            const int previousTip = tip;
+            for (int point = 0; point < 8; ++point) {
+                tip += 4;
+                continuousLive.touchMoved(tip, 80, 1);
+            }
+            auto pixels = renderCrop(continuousLive, context, 512, 512);
+            expectInk(pixels, 64, 160, true, "Incremental update discarded earlier live ink");
+            expectInk(pixels, previousTip + tip, 160, true, "Incremental update lost new live ink");
+        }
+        continuousLive.touchEnded();
+        expectInk(renderCrop(continuousLive, nullptr, 512, 512), 200, 160, true,
+                  "GPU preview did not persist vector ink at touch-up");
         // An overview must render every visible page, including newly grown
         // pages, and keep a stroke crossing the divider intact.
         SkiaDrawingEngine overview(512, 2048, true);

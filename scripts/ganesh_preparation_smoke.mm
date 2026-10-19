@@ -52,32 +52,35 @@ int main() {
                 drawing.setToolWithParams("pen", 16, color, "pixel");
                 drawing.touchBegan(24, 80, 1);
                 for (int x = 32; x <= 232; x += 8) drawing.touchMoved(x, 80, 1);
-                drawing.touchEnded();
-                if (!renderToGaneshMetalTexture(&drawing, context, (__bridge void*)texture, 256, 256, true))
-                    return 1;
-                id<MTLCommandBuffer> barrier = [queue commandBuffer];
-                [barrier commit];
-                [barrier waitUntilCompleted];
-                std::vector<uint8_t> cpu(256 * 256 * 4), gpu(cpu.size());
-                [texture getBytes:gpu.data() bytesPerRow:256 * 4 fromRegion:MTLRegionMake2D(0, 0, 256, 256) mipmapLevel:0];
-                void* canvas = createSkiaCanvas(cpu.data(), 256, 256, 256 * 4);
-                if (!canvas) return 1;
-                renderVisibleViewportToCanvas(&drawing, canvas);
-                destroySkiaCanvas(canvas);
-                const int center = (80 * 256 + 100) * 4;
-                for (int channel = 0; channel < 4; ++channel) {
-                    if (cpu[center + channel] != gpu[center + channel]) {
-                        matches = false;
-                        std::cerr << "CPU/GPU color mismatch for " << std::hex << color << std::dec
-                            << " channel " << channel << ": " << int(cpu[center + channel])
-                            << " vs " << int(gpu[center + channel]) << '\n';
+                for (bool committed : {false, true}) {
+                    if (committed) drawing.touchEnded();
+                    if (!renderToGaneshMetalTexture(&drawing, context, (__bridge void*)texture, 256, 256, true))
+                        return 1;
+                    id<MTLCommandBuffer> barrier = [queue commandBuffer];
+                    [barrier commit];
+                    [barrier waitUntilCompleted];
+                    std::vector<uint8_t> cpu(256 * 256 * 4), gpu(cpu.size());
+                    [texture getBytes:gpu.data() bytesPerRow:256 * 4 fromRegion:MTLRegionMake2D(0, 0, 256, 256) mipmapLevel:0];
+                    void* canvas = createSkiaCanvas(cpu.data(), 256, 256, 256 * 4);
+                    if (!canvas) return 1;
+                    renderVisibleViewportToCanvas(&drawing, canvas);
+                    destroySkiaCanvas(canvas);
+                    const int center = (80 * 256 + 100) * 4;
+                    for (int channel = 0; channel < 4; ++channel) {
+                        if (cpu[center + channel] != gpu[center + channel]) {
+                            matches = false;
+                            std::cerr << "CPU/GPU " << (committed ? "committed" : "live")
+                                << " color mismatch for " << std::hex << color << std::dec
+                                << " channel " << channel << ": " << int(cpu[center + channel])
+                                << " vs " << int(gpu[center + channel]) << '\n';
+                        }
                     }
                 }
             }
         }
         destroyGaneshMetalContext(context);
         if (!matches) return 1;
-        std::cout << "Background preparation and sequential context handoff passed (" << preparationMs << " ms); CPU/GPU colors match\n";
+        std::cout << "Background preparation and sequential context handoff passed (" << preparationMs << " ms); CPU/GPU live and committed colors match\n";
     }
     return 0;
 }

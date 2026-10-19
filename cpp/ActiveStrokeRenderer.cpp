@@ -32,7 +32,11 @@ void ActiveStrokeRenderer::reset() {
     }
 }
 
-void ActiveStrokeRenderer::ensureViewportAlignment(const ActiveStrokeViewport& viewport) {
+void ActiveStrokeRenderer::ensureViewportAlignment(const ActiveStrokeViewport& viewport, SkCanvas* targetCanvas) {
+    // Legacy page engines composite this preview into their CPU stroke layer
+    // at touch-up. Continuous engines retain vector ink and can stay on the
+    // output's GPU instead of copying and uploading a screen bitmap per input.
+    const void* context = viewportOnly_ ? targetCanvas->recordingContext() : nullptr;
     const float requestedScale =
         std::clamp(viewport.scale, kMinimumRenderScale, kMaximumRenderScale);
 
@@ -74,6 +78,7 @@ void ActiveStrokeRenderer::ensureViewportAlignment(const ActiveStrokeViewport& v
     }
 
     if (activeStrokeSurface_
+        && surfaceContext_ == context
         && nextWidth == surfaceWidth_ && nextHeight == surfaceHeight_
         && std::fabs(nextScale - viewportScale_) < 0.01f
         && std::fabs(nextOriginX - viewportOriginX_) < 0.5f
@@ -90,11 +95,14 @@ void ActiveStrokeRenderer::ensureViewportAlignment(const ActiveStrokeViewport& v
     resetIncrementalState();
     // Reading/scrolling a page does not need an active-stroke bitmap. Allocate
     // on the first stroke and retain it for subsequent strokes on this engine.
-    if (!activeStrokeSurface_ || nextWidth != surfaceWidth_ || nextHeight != surfaceHeight_) {
+    if (!activeStrokeSurface_ || surfaceContext_ != context
+        || nextWidth != surfaceWidth_ || nextHeight != surfaceHeight_) {
         surfaceWidth_ = nextWidth;
         surfaceHeight_ = nextHeight;
         SkImageInfo info = SkImageInfo::MakeN32Premul(surfaceWidth_, surfaceHeight_);
-        activeStrokeSurface_ = SkSurfaces::Raster(info);
+        surfaceContext_ = context;
+        activeStrokeSurface_ = context ? targetCanvas->makeSurface(info) : nullptr;
+        if (!activeStrokeSurface_) activeStrokeSurface_ = SkSurfaces::Raster(info);
     }
     if (activeStrokeSurface_) {
         activeStrokeSurface_->getCanvas()->clear(SK_ColorTRANSPARENT);
@@ -113,7 +121,8 @@ void ActiveStrokeRenderer::renderIncremental(
     const std::string& toolType,
     const ActiveStrokeViewport& viewport
 ) {
-    ensureViewportAlignment(viewport);
+    if (!canvas) return;
+    ensureViewportAlignment(viewport, canvas);
     if (!activeStrokeSurface_ || points.size() < 2) return;
 
     // Calligraphy: full redraw each frame for clean rendering
@@ -144,6 +153,9 @@ void ActiveStrokeRenderer::renderIncremental(
         }
 
         if (segment.size() >= 2) {
+            // Drop the obsolete image before mutating its backing surface.
+            // Otherwise Skia preserves it by copying the full preview bitmap.
+            cachedActiveSnapshot_.reset();
             SkCanvas* surfaceCanvas = activeStrokeSurface_->getCanvas();
             bool isFirstSegment = !hasLastEdge_;
 
@@ -235,6 +247,7 @@ void ActiveStrokeRenderer::renderFinalTail(
 
     if (finalTail.size() < 2) return;
 
+    cachedActiveSnapshot_.reset();
     SkCanvas* surfaceCanvas = activeStrokeSurface_->getCanvas();
 
     {
