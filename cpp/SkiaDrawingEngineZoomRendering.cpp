@@ -113,12 +113,19 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
     SkImageInfo info = SkImageInfo::MakeN32Premul(tileWidth, tileHeight);
     // Coverage AA on a single-sample target can rasterize each pressure path
     // into a separate CPU mask. Multisampled tiles let Ganesh tessellate those
-    // paths on the GPU; their snapshots are resolved single-sample images.
+    // paths on the GPU. Allocate the cache target first so allocation failure
+    // can fall back without retaining multisampled attachments in the cache.
     sk_sp<SkSurface> tileSurface;
+    sk_sp<SkSurface> resolved;
     if (auto* context = targetCanvas->recordingContext()) {
-        tileSurface = SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes, info, 4, nullptr);
+        resolved = SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes, info, 0, nullptr);
+        if (resolved) {
+            tileSurface = SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes, info, 4, nullptr);
+            if (!tileSurface) tileSurface = resolved;
+        }
+    } else {
+        tileSurface = targetCanvas->makeSurface(info);
     }
-    if (!tileSurface) tileSurface = targetCanvas->makeSurface(info);
     if (!tileSurface) {
         tileSurface = SkSurfaces::Raster(info);
     }
@@ -174,6 +181,15 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
         }
     }
 
+    if (resolved && resolved.get() != tileSurface.get()) {
+        // Cache resolved pixels independently. A snapshot of the multisampled
+        // render target can also retain its much larger MSAA attachment, which
+        // prevents Ganesh from reusing that attachment for the next tile.
+        SkPaint copyPaint;
+        copyPaint.setBlendMode(SkBlendMode::kSrc);
+        tileSurface->draw(resolved->getCanvas(), 0, 0, &copyPaint);
+        return resolved->makeImageSnapshot();
+    }
     return tileSurface->makeImageSnapshot();
 }
 

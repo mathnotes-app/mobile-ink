@@ -59,7 +59,7 @@ SkBitmap renderCrop(SkiaDrawingEngine& engine, GrDirectContext* context, int wid
 
 void expectInk(const SkBitmap& pixels, int x, int y, bool ink, const char* label) {
     const auto color = pixels.getColor(x, y);
-    const bool actual = SkColorGetR(color) < 100 && SkColorGetG(color) < 100;
+    const bool actual = SkColorGetA(color) > 100 && SkColorGetR(color) < 100 && SkColorGetG(color) < 100;
     if (actual != ink) throw std::runtime_error(label);
 }
 
@@ -110,6 +110,34 @@ int main() {
         continuousLive.touchEnded();
         expectInk(renderCrop(continuousLive, nullptr, 512, 512), 200, 160, true,
                   "GPU preview did not persist vector ink at touch-up");
+        {
+            auto cacheContext = makeContext();
+            SkiaDrawingEngine cachedPages(512, 4096, true);
+            cachedPages.setBackgroundType("pdf");
+            cachedPages.setToolWithParams("pen", 10, 0x000000, "pixel");
+            for (int page = 0; page < 8; ++page) {
+                cachedPages.touchBegan(40, page * 512 + 100, 1);
+                for (int x = 45; x <= 450; x += 5) cachedPages.touchMoved(x, page * 512 + 100, 1);
+                cachedPages.touchEnded();
+            }
+            for (int page = 0; page < 8; ++page) {
+                cachedPages.setRenderViewport(1, 0, page * 512, 512, 512);
+                expectInk(renderCrop(cachedPages, cacheContext.get(), 512, 512), 100, 100, true,
+                          "Resolving cached tiles lost ink");
+            }
+            cachedPages.clear();
+            cachedPages.setRenderViewport(1, 0, 0, 512, 512);
+            auto cleared = renderCrop(cachedPages, cacheContext.get(), 512, 512);
+            if (SkColorGetA(cleared.getColor(100, 100)) != 0)
+                throw std::runtime_error("Reused resolved tile retained deleted ink");
+            cacheContext->freeGpuResources();
+            size_t retainedBytes = 0;
+            cacheContext->getResourceCacheUsage(nullptr, &retainedBytes);
+            // Eight 1 MiB images plus backend overhead fit comfortably here.
+            // Retaining their four-sample render targets exceeds this bound.
+            if (retainedBytes > 16 * 1024 * 1024)
+                throw std::runtime_error("Tile images retained multisampled render attachments");
+        }
         // An overview must render every visible page, including newly grown
         // pages, and keep a stroke crossing the divider intact.
         SkiaDrawingEngine overview(512, 2048, true);

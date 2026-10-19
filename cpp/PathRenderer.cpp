@@ -63,6 +63,9 @@ void PathRenderer::drawVariableWidthPath(
 
     // Create path from edges
     SkPath strokePath;
+    // This outline is discarded after one draw. Avoid Ganesh's persistent
+    // path triangulation/buffer cache for a path that cannot be reused.
+    strokePath.setIsVolatile(true);
     std::vector<SkPoint> leftEdge, rightEdge;
     for (const auto& ep : edges) {
         leftEdge.push_back(ep.left);
