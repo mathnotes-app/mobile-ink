@@ -60,6 +60,7 @@ class MobileInkCanvasView: MTKView {
     private var ganeshMetalContext: OpaquePointer?
     private var ganeshPreparationAttempted = false
     private var ganeshPreparationPending = false
+    private var ganeshPreparationRequest: MobileInkGaneshPreparation.Request?
     private var hasPresentedFrame = false
     var requestedRenderBackend: MobileInkRenderBackend = .ganesh
     let benchmarkRecorder: MobileInkBenchmarkRecorder
@@ -183,6 +184,7 @@ class MobileInkCanvasView: MTKView {
     @objc var drawingPolicy: String = "default"
     @objc var renderBackend: String = MobileInkRenderBackend.ganesh.rawValue {
         didSet {
+            guard !isReleased else { return }
             let normalizedBackend = MobileInkRenderBackend(rawValue: renderBackend.lowercased()) ?? .ganesh
             requestedRenderBackend = normalizedBackend
             benchmarkRecorder.updateRequestedBackend(normalizedBackend.rawValue)
@@ -368,6 +370,8 @@ class MobileInkCanvasView: MTKView {
     func releaseHeavyNativeState() {
         if isReleased { return }
         isReleased = true
+        ganeshPreparationRequest?.cancel()
+        ganeshPreparationRequest = nil
         if let audit = interactionAudit {
             if Thread.isMainThread { audit.dispose() }
             else { DispatchQueue.main.async { audit.dispose() } }
@@ -1862,12 +1866,13 @@ extension MobileInkCanvasView: MTKViewDelegate {
         }
         ganeshPreparationAttempted = true
         ganeshPreparationPending = true
-        MobileInkGaneshPreparation.prepare(device: device, commandQueue: commandQueue) { [weak self] context in
+        ganeshPreparationRequest = MobileInkGaneshPreparation.prepare(device: device, commandQueue: commandQueue) { [weak self] context in
             guard let self, !self.isReleased else {
                 if let context { MobileInkGaneshPreparation.discard(context) }
                 return
             }
             self.ganeshPreparationPending = false
+            self.ganeshPreparationRequest = nil
             self.ganeshMetalContext = context
             if context == nil {
                 NSLog("[MobileInk][Ganesh] Renderer preparation failed; using CPU rendering")

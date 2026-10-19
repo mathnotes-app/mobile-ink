@@ -25,14 +25,26 @@ final class MobileInkInteractionAudit {
     observe("end") { [weak self] in self?.end() }
     let work = DispatchWorkItem { [weak self] in
       guard let self, !self.disposed, self.phase == "startup" else { return }
+      self.finish(completed: false)
+      self.acknowledge("startup")
+    }
+    startupWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)
+  }
+
+  func didPresentInitialLoad() {
+    guard !initialLoadPresented, !disposed else { return }
+    initialLoadPresented = true
+    guard phase == "startup" else { return }
+    startupWork?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      guard let self, !self.disposed, self.phase == "startup" else { return }
       self.finish(completed: true)
       self.acknowledge("startup")
     }
     startupWork = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
   }
-
-  func didPresentInitialLoad() { initialLoadPresented = true }
 
   func dispose() {
     guard !disposed else { return }

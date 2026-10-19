@@ -1,5 +1,6 @@
 #import <Metal/Metal.h>
 #include "cpp/SkiaDrawingEngine.h"
+#include <cmath>
 #include <include/gpu/ganesh/GrDirectContext.h>
 
 extern "C" bool renderToGaneshMetalTexture(void*, void*, void*, int, int, bool);
@@ -24,20 +25,24 @@ extern "C" bool warmGaneshMetalContext(void* contextPtr, void* devicePtr) {
                 return renderToGaneshMetalTexture(&drawing, contextPtr, (__bridge void*)texture, 256, 256, true);
             };
             for (const char* tool : {"pen", "pencil", "marker", "highlighter", "crayon", "calligraphy"}) {
-                drawing.clear();
-                drawing.setToolWithParams(tool, 12, 0xFF3040E0, "pixel");
-                drawing.touchBegan(24, 80, 1);
-                for (int x = 32; x <= 232; x += 8) drawing.touchMoved(x, 80, 1);
-                if (!render()) return false;
-                drawing.touchEnded();
-                if (!render()) return false;
+                for (float pressure : {0.1f, 1.0f}) {
+                    for (bool curved : {false, true}) {
+                        drawing.clear();
+                        drawing.setToolWithParams(tool, 12, 0xFF3040E0, "pixel");
+                        drawing.touchBegan(24, curved ? 80 + 14 * std::sin(24 * 0.08f) : 80, pressure);
+                        for (int x = 32; x <= 232; x += 8) drawing.touchMoved(x, curved ? 80 + 14 * std::sin(x * 0.08f) : 80, pressure);
+                        if (!render()) return false;
+                        drawing.touchEnded();
+                        if (!render()) return false;
+                    }
+                }
             }
             drawing.setToolWithParams("eraser", 18, 0xFF000000, "pixel");
             drawing.touchBegan(128, 64, 1);
             drawing.touchMoved(128, 96, 1);
             drawing.touchEnded();
             if (!render()) return false;
-            if (drawing.selectStrokeAt(64, 80)) {
+            if (drawing.selectStrokeAt(64, 80 + 14 * std::sin(64 * 0.08f))) {
                 drawing.beginSelectionDrag();
                 drawing.moveSelection(4, 4);
                 if (!render()) return false;
