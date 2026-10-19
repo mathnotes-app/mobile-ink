@@ -58,6 +58,9 @@ class MobileInkCanvasView: MTKView {
     var drawingEngine: OpaquePointer?
     private var commandQueue: MTLCommandQueue?
     private var ganeshMetalContext: OpaquePointer?
+    private var ganeshPreparationAttempted = false
+    private var ganeshPreparationPending = false
+    private var hasPresentedFrame = false
     var requestedRenderBackend: MobileInkRenderBackend = .ganesh
     let benchmarkRecorder: MobileInkBenchmarkRecorder
     private var automaticBenchmarkStarted = false
@@ -183,6 +186,7 @@ class MobileInkCanvasView: MTKView {
             let normalizedBackend = MobileInkRenderBackend(rawValue: renderBackend.lowercased()) ?? .ganesh
             requestedRenderBackend = normalizedBackend
             benchmarkRecorder.updateRequestedBackend(normalizedBackend.rawValue)
+            if normalizedBackend == .ganesh { _ = ensureGaneshMetalContext() }
 
             if normalizedBackend == .cpu {
                 if pixelWidth > 0 && pixelHeight > 0 {
@@ -393,11 +397,11 @@ class MobileInkCanvasView: MTKView {
             destroyGaneshMetalContext(context)
             ganeshMetalContext = nil
         }
-        // Drop any queued JS callbacks waiting for a Metal frame that
-        // will never come now that we're off-screen. Without this they
-        // pin the bridge callback closures until the MTKView eventually
-        // releases (sometime later, never on a heavy session).
+        // Settle loads waiting for a frame, including background preparation.
+        // Dropping the native block alone leaves its JavaScript promise pending.
+        let cancelledLoads = pendingPresentedLoadCallbacks
         pendingPresentedLoadCallbacks.removeAll()
+        cancelledLoads.forEach { $0(["Canvas released before load presentation", NSNull()]) }
         deferredBase64Payload = nil
         hasDeferredPresentation = false
         onDrawingChange = nil
@@ -1860,17 +1864,25 @@ extension MobileInkCanvasView: MTKViewDelegate {
             return context
         }
 
-        guard let device = device, let commandQueue = commandQueue else {
+        guard !ganeshPreparationAttempted, !isReleased,
+              let device = device, let commandQueue = commandQueue else {
             return nil
         }
-
-        let devicePtr = Unmanaged.passUnretained(device).toOpaque()
-        let queuePtr = Unmanaged.passUnretained(commandQueue).toOpaque()
-        ganeshMetalContext = createGaneshMetalContext(devicePtr, queuePtr)
-        if ganeshMetalContext != nil {
-            print("[MobileInk][Ganesh] Experimental Ganesh/Metal renderer enabled")
+        ganeshPreparationAttempted = true
+        ganeshPreparationPending = true
+        MobileInkGaneshPreparation.prepare(device: device, commandQueue: commandQueue) { [weak self] context in
+            guard let self, !self.isReleased else {
+                if let context { MobileInkGaneshPreparation.discard(context) }
+                return
+            }
+            self.ganeshPreparationPending = false
+            self.ganeshMetalContext = context
+            if context == nil {
+                NSLog("[MobileInk][Ganesh] Renderer preparation failed; using CPU rendering")
+            }
+            self.requestDisplay(forceWhenSuspended: true)
         }
-        return ganeshMetalContext
+        return nil
     }
 
     private func attachPresentedLoadCallbacks(to commandBuffer: MTLCommandBuffer) {
@@ -1880,10 +1892,15 @@ extension MobileInkCanvasView: MTKViewDelegate {
 
         let loadCallbacks = pendingPresentedLoadCallbacks
         pendingPresentedLoadCallbacks.removeAll()
-        commandBuffer.addCompletedHandler { _ in
+        commandBuffer.addCompletedHandler { [weak self] completed in
             DispatchQueue.main.async {
+                let error: String?
+                if self?.isReleased != false { error = "Canvas released before load presentation" }
+                else if completed.status == .error { error = "Metal could not present the loaded drawing" }
+                else { error = nil }
                 loadCallbacks.forEach { callback in
-                    callback([NSNull(), true])
+                    if let error { callback([error, NSNull()]) }
+                    else { callback([NSNull(), true]) }
                 }
             }
         }
@@ -1892,6 +1909,14 @@ extension MobileInkCanvasView: MTKViewDelegate {
     func draw(in view: MTKView) {
         guard let engine = drawingEngine else {
             return
+        }
+
+        if useExperimentalGaneshBackend {
+            _ = ensureGaneshMetalContext()
+            // Keep the loading UI responsive until the first native frame can
+            // use prepared GPU programs. An already-visible CPU canvas keeps
+            // drawing while an explicit backend change prepares Ganesh.
+            if ganeshPreparationPending && !hasPresentedFrame { return }
         }
 
         // Cropping can resize the drawable without a delegate size callback.
@@ -1920,6 +1945,10 @@ extension MobileInkCanvasView: MTKViewDelegate {
                 guard let commandBuffer = commandQueue.makeCommandBuffer() else {
                     return
                 }
+                pixelBuffer?.deallocate()
+                pixelBuffer = nil
+                pixelBufferLength = 0
+                pixelBytesPerRow = 0
                 attachPresentedLoadCallbacks(to: commandBuffer)
                 attachBenchmarkFrameCallback(
                     to: commandBuffer,
@@ -1927,6 +1956,7 @@ extension MobileInkCanvasView: MTKViewDelegate {
                     didFallbackFromGanesh: false,
                     renderDurationMs: renderDurationMs
                 )
+                hasPresentedFrame = true
                 commandBuffer.present(freshDrawable)
                 commandBuffer.commit()
                 return
@@ -1978,6 +2008,7 @@ extension MobileInkCanvasView: MTKViewDelegate {
             renderDurationMs: renderDurationMs
         )
 
+        hasPresentedFrame = true
         commandBuffer.present(freshDrawable)
         commandBuffer.commit()
     }

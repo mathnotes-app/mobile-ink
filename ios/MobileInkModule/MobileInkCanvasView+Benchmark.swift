@@ -10,7 +10,7 @@ extension MobileInkCanvasView {
     didFallbackFromGanesh: Bool,
     renderDurationMs: Double
   ) {
-    guard benchmarkRecorder.isRunning else {
+    guard let token = benchmarkRecorder.prepareFrame() else {
       return
     }
 
@@ -19,6 +19,7 @@ extension MobileInkCanvasView {
       let completedAt = CACurrentMediaTime()
       DispatchQueue.main.async {
         self?.benchmarkRecorder.recordPresentedFrame(
+          token: token,
           backend: backend,
           didFallbackFromGanesh: didFallbackFromGanesh,
           renderDurationMs: renderDurationMs,

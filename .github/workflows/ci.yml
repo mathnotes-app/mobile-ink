@@ -46,6 +46,9 @@ jobs:
       - name: Detect and reset native main-queue stalls
         run: npm run test:native:heartbeat-smoke
 
+      - name: Verify background GPU preparation and CPU/GPU color parity
+        run: npm run test:native:ganesh-preparation-smoke
+
       - name: Run native serialization smoke test
         run: npm run test:native:smoke
 

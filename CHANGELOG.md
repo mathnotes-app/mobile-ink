@@ -4,6 +4,9 @@ All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
 ## [0.3.10] - 2026-10-19
 
+- Prepare Ganesh contexts and common shader programs on a bounded background queue, then transfer ownership before the first native presentation. Keep loading UI responsive and preserve CPU fallback when preparation fails; closing a canvas settles pending native load callbacks.
+- Associate benchmark input samples with their encoded frame and recording session so delayed GPU completion callbacks cannot consume newer input or pollute a restarted recording.
+
 - Decode continuous notebooks once on the iOS background queue and hand prepared geometry to the canvas, avoiding combined-document base64 encoding and main-thread decoding on open.
 - Add opt-in native audit reports with independent main-queue heartbeat delays, render timing, and memory counters. Unattended UI tests can set `MOBILE_INK_AUDIT=1`; recording starts before native canvas construction, contains no drawing or note content, and is written when the canvas releases.
 - Support continuous-document overview rendering down to 25% zoom without truncating later pages at the native drawable limit.

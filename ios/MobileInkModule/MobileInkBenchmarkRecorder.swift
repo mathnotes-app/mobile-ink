@@ -8,6 +8,10 @@ enum MobileInkRenderBackend: String {
 }
 
 final class MobileInkBenchmarkRecorder {
+  struct FrameToken {
+    fileprivate let sessionId: String
+    fileprivate let inputTimes: [CFTimeInterval]
+  }
   private let frameBudgetMultiplier = 1.5
   private let presentationPauseThresholdMs = 250.0
   private(set) var isRunning = false
@@ -93,14 +97,25 @@ final class MobileInkBenchmarkRecorder {
     syntheticPointCount += 1
   }
 
+  // Associate input with the frame being encoded. A completion callback can
+  // reach the main queue after newer input arrives; that input belongs to the
+  // next frame, not the earlier GPU completion timestamp.
+  func prepareFrame() -> FrameToken? {
+    guard isRunning else { return nil }
+    let token = FrameToken(sessionId: sessionId, inputTimes: pendingInputTimes)
+    pendingInputTimes.removeAll(keepingCapacity: true)
+    return token
+  }
+
   func recordPresentedFrame(
+    token: FrameToken,
     backend: MobileInkRenderBackend,
     didFallbackFromGanesh: Bool,
     renderDurationMs: Double,
     completedAt: CFTimeInterval,
     maximumFramesPerSecond: Int
   ) {
-    guard isRunning else { return }
+    guard isRunning, token.sessionId == sessionId else { return }
 
     renderFrameCount += 1
     renderDurationsMs.append(renderDurationMs)
@@ -130,11 +145,8 @@ final class MobileInkBenchmarkRecorder {
     }
     lastPresentedAt = completedAt
 
-    if !pendingInputTimes.isEmpty {
-      for inputTime in pendingInputTimes {
-        inputToPresentLatenciesMs.append((completedAt - inputTime) * 1000.0)
-      }
-      pendingInputTimes.removeAll(keepingCapacity: true)
+    for inputTime in token.inputTimes {
+      inputToPresentLatenciesMs.append((completedAt - inputTime) * 1000.0)
     }
 
     sampleMemory()
