@@ -66,6 +66,8 @@ final class MobileInkBenchmarkRecorder {
     startMainQueueHeartbeat()
   }
 
+  func updateRequestedBackend(_ backend: String) { requestedBackend = backend }
+
   func finish() -> [String: Any] {
     sampleMemory()
     endTime = CACurrentMediaTime()

@@ -8,6 +8,7 @@ struct RecorderHeartbeatSmoke {
   static func main() {
     let recorder = MobileInkBenchmarkRecorder()
     recorder.start(scenario: "heartbeat-smoke", requestedBackend: "cpu")
+    recorder.updateRequestedBackend("ganesh")
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
       Thread.sleep(forTimeInterval: 0.18)
     }
@@ -16,7 +17,7 @@ struct RecorderHeartbeatSmoke {
       guard let delays = first["mainQueueDelayMs"] as? [String: Any],
             let maximum = delays["max"] as? Double,
             let count = first["mainQueueStallCount"] as? Int,
-            maximum >= 100, count >= 1 else {
+            maximum >= 100, count >= 1, first["requestedBackend"] as? String == "ganesh" else {
         fputs("Heartbeat failed to detect the intentional main-queue stall\n", stderr)
         exit(1)
       }

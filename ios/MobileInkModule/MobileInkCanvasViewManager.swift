@@ -203,7 +203,7 @@ class MobileInkCanvasViewManager: RCTViewManager {
     containerView.addSubview(backgroundView)
 
     // Create and add drawing view on top (transparent Metal view)
-    let drawingView = MobileInkCanvasView(frame: .zero, device: MTLCreateSystemDefaultDevice())
+    let drawingView = MobileInkCanvasView(frame: .zero, device: nil)
     // Drawing geometry is set from the visible document rectangle.
     drawingView.autoresizingMask = []
     drawingView.backgroundView = backgroundView // Set reference for export

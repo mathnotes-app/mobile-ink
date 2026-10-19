@@ -59,7 +59,7 @@ class MobileInkCanvasView: MTKView {
     private var commandQueue: MTLCommandQueue?
     private var ganeshMetalContext: OpaquePointer?
     var requestedRenderBackend: MobileInkRenderBackend = .ganesh
-    var benchmarkRecorder = MobileInkBenchmarkRecorder()
+    let benchmarkRecorder: MobileInkBenchmarkRecorder
     private var automaticBenchmarkStarted = false
     var isBenchmarkReplayRunning = false
     var benchmarkRunToken = UUID()
@@ -182,6 +182,7 @@ class MobileInkCanvasView: MTKView {
         didSet {
             let normalizedBackend = MobileInkRenderBackend(rawValue: renderBackend.lowercased()) ?? .ganesh
             requestedRenderBackend = normalizedBackend
+            benchmarkRecorder.updateRequestedBackend(normalizedBackend.rawValue)
 
             if normalizedBackend == .cpu {
                 if pixelWidth > 0 && pixelHeight > 0 {
@@ -272,6 +273,18 @@ class MobileInkCanvasView: MTKView {
     private var pageHeight: CGFloat = 0
 
     override init(frame: CGRect, device: MTLDevice?) {
+        // Start before Metal/view construction so the audit includes cold-open
+        // work, rather than beginning only once the first frame is ready.
+        let recorder = MobileInkBenchmarkRecorder()
+        let auditEnabled = ProcessInfo.processInfo.environment["MOBILE_INK_AUDIT"] == "1"
+        if auditEnabled {
+            recorder.start(
+                scenario: ProcessInfo.processInfo.environment["MOBILE_INK_AUDIT_SCENARIO"] ?? "native-interaction",
+                requestedBackend: MobileInkRenderBackend.ganesh.rawValue
+            )
+        }
+        self.benchmarkRecorder = recorder
+        self.automaticBenchmarkStarted = auditEnabled
         let metalDevice = device ?? MTLCreateSystemDefaultDevice()
         super.init(frame: frame, device: metalDevice)
 
@@ -1879,15 +1892,6 @@ extension MobileInkCanvasView: MTKViewDelegate {
     func draw(in view: MTKView) {
         guard let engine = drawingEngine else {
             return
-        }
-
-        if !automaticBenchmarkStarted,
-           ProcessInfo.processInfo.environment["MOBILE_INK_AUDIT"] == "1" {
-            automaticBenchmarkStarted = true
-            benchmarkRecorder.start(
-                scenario: ProcessInfo.processInfo.environment["MOBILE_INK_AUDIT_SCENARIO"] ?? "native-interaction",
-                requestedBackend: requestedRenderBackend.rawValue
-            )
         }
 
         // Cropping can resize the drawable without a delegate size callback.
