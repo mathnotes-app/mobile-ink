@@ -193,6 +193,30 @@ int main() {
             const auto restored = nativedrawing::composeContinuousDocument(pages, 1000);
             if (serializer.serialize(restored) != originalBytes)
                 throw std::runtime_error("Page ownership roundtrip changed stroke geometry or ordering");
+            auto comparePreparedLoad = [&](const std::vector<nativedrawing::Stroke>& preparedStrokes) {
+                for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
+                    SkiaDrawingEngine decoded(512, 2000, true);
+                    SkiaDrawingEngine prepared(512, 2000, true);
+                    drawLine(prepared);
+                    prepared.setRenderViewport(1, 80, 850, 100, 300);
+                    renderCrop(prepared, context, 100, 300); // Populate the previous drawing's tiles.
+                    auto incoming = preparedStrokes;
+                    prepared.replaceDrawing(incoming);
+                    if (incoming.size() != 1 || !decoded.deserializeDrawing(serializer.serialize(preparedStrokes)))
+                        throw std::runtime_error("Prepared load did not swap its owned geometry");
+                    for (float scale : {0.25f, 0.5f, 1.0f, 2.0f, 5.0f}) {
+                        decoded.setRenderViewport(scale, 80, 850, 100, 300);
+                        prepared.setRenderViewport(scale, 80, 850, 100, 300);
+                        const auto expected = renderCrop(decoded, context, int(100 * scale), int(300 * scale));
+                        const auto actual = renderCrop(prepared, context, int(100 * scale), int(300 * scale));
+                        for (int y = 0; y < actual.height(); ++y)
+                            for (int x = 0; x < actual.width(); ++x)
+                                if (actual.getColor(x, y) != expected.getColor(x, y))
+                                    throw std::runtime_error("Prepared load changed crossing/erased ink pixels");
+                    }
+                }
+            };
+            comparePreparedLoad(restored);
             const auto exportPages = nativedrawing::projectContinuousDocumentPages(pages, 1000, {0, 1});
             for (int pageIndex = 0; pageIndex < 2; ++pageIndex) {
                 if (exportPages[pageIndex].size() != 2)
@@ -232,6 +256,7 @@ int main() {
             if (erasedRoundtrip[1].affectedStrokeIndices != strokes[1].affectedStrokeIndices ||
                 erasedRoundtrip[0].erasedBy[0].y != 1000)
                 throw std::runtime_error("Document partition lost eraser metadata");
+            comparePreparedLoad(erasedRoundtrip);
             auto corruptPages = pages;
             corruptPages[1].order[0] = corruptPages[0].order[0];
             bool rejected = false;
