@@ -62,3 +62,9 @@ Consumers own storage and decide how serialized notebook payloads move through t
 ## Native Memory Lifecycle
 
 The pool reuses native views for page changes. Heavy native state is released only on final unmount through `releaseEngine` where the platform needs explicit teardown, which prevents scroll-driven native-view churn and keeps allocations flat during repeated page crossing.
+
+### iOS drawable acquisition
+
+`MobileInkFrameAcquisition` obtains `CAMetalLayer.nextDrawable()` on a serial queue. That call can wait for the presentation pool; it must not block UIKit touch handling. Rendering and engine mutation remain on the main thread, with one frame in flight until GPU completion. Changes made while a frame is pending are coalesced into the next frame. A detached or resized view discards an obsolete drawable and retries while visible; release cancels pending delivery. GPU submission errors switch subsequent frames to the CPU renderer, retaining the old GPU context until its engine resources are destroyed.
+
+Native timing reports include acquisition wait in `renderMs`, so moving the wait off the input thread does not conceal late frames. `npm run test:native:frame-acquisition-smoke` checks responsiveness during a blocked provider, the in-flight limit, empty results, cancellation, and reuse. Native app interaction audits exercise drawing through autosave, pan/zoom, and view release with a dense notebook.

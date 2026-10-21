@@ -49,6 +49,9 @@ jobs:
       - name: Verify native startup and acknowledged interaction windows
         run: npm run test:native:phased-audit-smoke
 
+      - name: Test nonblocking drawable acquisition
+        run: npm run test:native:frame-acquisition-smoke
+
       - name: Verify background GPU preparation and CPU/GPU color parity
         run: npm run test:native:ganesh-preparation-smoke
 
