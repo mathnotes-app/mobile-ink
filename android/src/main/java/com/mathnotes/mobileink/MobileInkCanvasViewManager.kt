@@ -65,6 +65,11 @@ class MobileInkCanvasViewManager(private val reactContext: ReactApplicationConte
         view.renderBackend = backend ?: "ganesh"
     }
 
+    @ReactProp(name = "displayAppearance")
+    fun setDisplayAppearance(view: MobileInkCanvasView, appearance: String?) {
+        view.displayAppearance = appearance ?: "light"
+    }
+
     @ReactProp(name = "continuousDocument")
     fun setContinuousDocument(view: MobileInkCanvasView, enabled: Boolean) {
         view.continuousDocument = enabled

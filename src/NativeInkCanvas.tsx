@@ -28,6 +28,7 @@ import {
   MobileInkCanvasViewNative,
   MobileInkModule,
   supportsRenderBackendProp,
+  supportsInkDisplayAppearance,
 } from "./native-ink-canvas/nativeModules";
 import type {
   NativeInkCanvasProps,
@@ -612,6 +613,7 @@ export const NativeInkCanvas = forwardRef<
     onDrawingBegin: props.onDrawingBegin,
     onInkSelectionChange: props.onSelectionChange,
     backgroundType: props.backgroundType,
+    ...(supportsInkDisplayAppearance ? { displayAppearance: props.displayAppearance ?? 'light' } : {}),
     pdfBackgroundUri: props.pdfBackgroundUri,
     renderSuspended: props.renderSuspended,
     drawingPolicy: props.drawingPolicy,

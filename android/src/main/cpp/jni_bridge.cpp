@@ -3,6 +3,7 @@
 #include <android/bitmap.h>
 #include <GLES2/gl2.h>
 #include "SkiaDrawingEngine.h"
+#include "DisplayAppearance.h"
 #include "DrawingSerialization.h"
 #include <include/core/SkCanvas.h>
 #include <include/core/SkColorFilter.h>
@@ -118,13 +119,13 @@ sk_sp<SkImage> makeRedBlueSwappedImage(const sk_sp<SkImage>& image) {
     return surface->makeImageSnapshot();
 }
 
-void renderWithDisplayColorOrdering(SkiaDrawingEngine* engine, SkCanvas* canvas, bool cropped = false) {
+void renderWithDisplayColorOrdering(SkiaDrawingEngine* engine, SkCanvas* canvas, bool cropped, bool dark) {
     if (!engine || !canvas) {
         return;
     }
 
     SkPaint outputPaint;
-    outputPaint.setColorFilter(makeRedBlueSwapFilter());
+    outputPaint.setColorFilter(nativedrawing::makeDisplayColorFilter(dark, true));
     canvas->saveLayer(nullptr, &outputPaint);
     if (cropped) engine->renderVisibleViewport(canvas);
     else engine->render(canvas);
@@ -883,7 +884,7 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_deserializeDrawing(
 
 JNIEXPORT jboolean JNICALL
 Java_com_mathnotes_mobileink_MobileInkCanvasView_renderGaneshToCurrentSurface(
-    JNIEnv* env, jobject obj, jlong contextPtr, jint width, jint height) {
+    JNIEnv* env, jobject obj, jlong contextPtr, jint width, jint height, jboolean dark) {
 
     auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
     if (!ctx || !ctx->engine || width <= 0 || height <= 0) {
@@ -956,7 +957,7 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_renderGaneshToCurrentSurface(
     }
 
     SkCanvas* canvas = ctx->ganeshSurface->getCanvas();
-    renderWithDisplayColorOrdering(ctx->engine.get(), canvas, ctx->continuousDocument);
+    renderWithDisplayColorOrdering(ctx->engine.get(), canvas, ctx->continuousDocument, dark == JNI_TRUE);
     ctx->ganeshContext->flushAndSubmit(ctx->ganeshSurface.get());
     return JNI_TRUE;
 }

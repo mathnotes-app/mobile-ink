@@ -4,6 +4,7 @@ import {
   requireNativeComponent,
   UIManager,
 } from "react-native";
+import type { InkDisplayAppearance } from '../displayAppearance';
 
 const COMPONENT_NAME = "MobileInkCanvasView";
 
@@ -42,6 +43,19 @@ export const supportsRenderBackendProp =
     mobileInkCanvasViewConfig.NativeProps,
     "renderBackend",
   );
+
+const backgroundConfig = Platform.OS === 'ios'
+  ? UIManager.getViewManagerConfig('MobileInkBackgroundView') as { NativeProps?: Record<string, unknown> } | null
+  : null;
+
+export const supportsInkDisplayAppearance = !!mobileInkCanvasViewConfig?.NativeProps?.displayAppearance &&
+  (Platform.OS !== 'ios' || !!backgroundConfig?.NativeProps?.displayAppearance);
+
+/** Keep document ink and paper readable when JavaScript runs on an older binary. */
+export function resolveInkDisplayAppearance(requested: InkDisplayAppearance): InkDisplayAppearance {
+  'worklet';
+  return requested === 'dark' && supportsInkDisplayAppearance ? 'dark' : 'light';
+}
 
 export const MobileInkCanvasViewNative =
   mobileInkCanvasViewConfig != null

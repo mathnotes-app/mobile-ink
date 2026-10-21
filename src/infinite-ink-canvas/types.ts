@@ -41,6 +41,7 @@ export type InfiniteInkCanvasRef = {
 };
 
 export type InfiniteInkCanvasProps = {
+  displayAppearance?: import('../displayAppearance').InkDisplayAppearance;
   style?: StyleProp<ViewStyle>;
   initialData?: SerializedNotebookData | string;
   initialPageCount?: number;

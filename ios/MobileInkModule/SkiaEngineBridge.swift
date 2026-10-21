@@ -85,6 +85,9 @@ func renderToCanvas(_ engine: OpaquePointer, _ canvas: OpaquePointer)
 @_silgen_name("renderVisibleViewportToCanvas")
 func renderVisibleViewportToCanvas(_ engine: OpaquePointer, _ canvas: OpaquePointer)
 
+@_silgen_name("renderToDisplayCanvas")
+func renderToDisplayCanvas(_ engine: OpaquePointer, _ canvas: OpaquePointer, _ cropped: Bool, _ dark: Bool)
+
 @_silgen_name("renderToCanvasForExport")
 func renderToCanvasForExport(_ engine: OpaquePointer, _ canvas: OpaquePointer)
 
@@ -115,6 +118,10 @@ func renderToGaneshMetalTexture(
 ) -> Bool
 
 // MARK: - Skia Canvas Helpers
+@_silgen_name("renderToGaneshMetalTextureForDisplay")
+func renderToGaneshMetalTextureForDisplay(_ engine: OpaquePointer, _ context: OpaquePointer,
+  _ texture: UnsafeMutableRawPointer, _ width: Int32, _ height: Int32, _ cropped: Bool, _ dark: Bool) -> Bool
+
 @_silgen_name("createSkiaCanvas")
 func createSkiaCanvas(_ pixels: UnsafeMutableRawPointer, _ width: Int32, _ height: Int32, _ rowBytes: Int32) -> OpaquePointer?
 

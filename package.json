@@ -20,6 +20,8 @@
     "src/ZoomableInkViewport.tsx",
     "src/zoomable-ink-viewport",
     "src/index.ts",
+    "src/displayAppearance.ts",
+    "src/InkDisplayImage.tsx",
     "src/payload.ts",
     "src/types.ts",
     "src/benchmark",
@@ -48,7 +50,7 @@
     "test:example:export:ios": "npm --prefix example run export:ios",
     "test:example:export:android": "npm --prefix example run export:android",
     "pack:dry-run": "npm pack --dry-run",
-    "validate": "npm run typecheck && npm run test && npm run test:release && npm run test:native:heartbeat-smoke && npm run test:native:phased-audit-smoke && npm run test:native:frame-acquisition-smoke && npm run test:native:smoke && npm run test:native:eraser-smoke && npm run test:native:selection-smoke && npm run test:native:snapshot-smoke && npm run test:native:zoom-smoke && npm run test:native:ganesh-preparation-smoke && npm run test:native:document-jni && npm run build && npm run pack:dry-run && npm run test:example:typecheck && npm run test:example:export:ios && npm run test:example:export:android",
+    "validate": "npm run typecheck && npm run test && npm run test:release && npm run test:native:heartbeat-smoke && npm run test:native:phased-audit-smoke && npm run test:native:frame-acquisition-smoke && npm run test:native:display-appearance-smoke && npm run test:native:smoke && npm run test:native:eraser-smoke && npm run test:native:selection-smoke && npm run test:native:snapshot-smoke && npm run test:native:zoom-smoke && npm run test:native:ganesh-preparation-smoke && npm run test:native:document-jni && npm run build && npm run pack:dry-run && npm run test:example:typecheck && npm run test:example:export:ios && npm run test:example:export:android",
     "prepack": "npm run build",
     "test:native:zoom-smoke": "clang++ -O2 -std=c++20 -fobjc-arc scripts/zoom_surface_smoke.mm cpp/*.cpp -I cpp -I node_modules/@shopify/react-native-skia/cpp/skia -I node_modules/@shopify/react-native-skia/cpp/skia/modules/pathops/include node_modules/@shopify/react-native-skia/libs/apple/libskia.xcframework/macos-arm64_x86_64/libskia.a node_modules/@shopify/react-native-skia/libs/apple/libpathops.xcframework/macos-arm64_x86_64/libpathops.a -framework Metal -framework ApplicationServices -framework CoreFoundation -framework CoreGraphics -framework CoreText -framework Foundation -framework QuartzCore -o /tmp/mobile_ink_zoom_surface_smoke && /tmp/mobile_ink_zoom_surface_smoke",
     "benchmark:native:zoom": "clang++ -O2 -std=c++20 -fobjc-arc scripts/zoom_render_benchmark.mm cpp/*.cpp -I cpp -I node_modules/@shopify/react-native-skia/cpp/skia -I node_modules/@shopify/react-native-skia/cpp/skia/modules/pathops/include node_modules/@shopify/react-native-skia/libs/apple/libskia.xcframework/macos-arm64_x86_64/libskia.a node_modules/@shopify/react-native-skia/libs/apple/libpathops.xcframework/macos-arm64_x86_64/libpathops.a -framework Metal -framework ApplicationServices -framework CoreFoundation -framework CoreGraphics -framework CoreText -framework Foundation -framework QuartzCore -o /tmp/mobile_ink_zoom_render_benchmark && /tmp/mobile_ink_zoom_render_benchmark",
@@ -58,7 +60,8 @@
     "test:native:heartbeat-smoke": "swiftc -swift-version 5 ios/MobileInkModule/MobileInkBenchmarkRecorder.swift scripts/benchmark_recorder_smoke.swift -o /tmp/mobile_ink_heartbeat_smoke && /tmp/mobile_ink_heartbeat_smoke",
     "test:native:ganesh-preparation-smoke": "clang++ -O2 -std=c++20 -fobjc-arc scripts/ganesh_preparation_smoke.mm ios/MobileInkModule/MobileInkGaneshWarmup.mm ios/MobileInkModule/MobileInkBridge.mm cpp/*.cpp -I . -I cpp -I node_modules/@shopify/react-native-skia/cpp/skia -I node_modules/@shopify/react-native-skia/cpp/skia/modules/pathops/include node_modules/@shopify/react-native-skia/libs/apple/libskia.xcframework/macos-arm64_x86_64/libskia.a node_modules/@shopify/react-native-skia/libs/apple/libpathops.xcframework/macos-arm64_x86_64/libpathops.a -framework Metal -framework ApplicationServices -framework CoreFoundation -framework CoreGraphics -framework CoreText -framework Foundation -framework QuartzCore -o /tmp/mobile_ink_ganesh_preparation_smoke && /tmp/mobile_ink_ganesh_preparation_smoke",
     "test:native:phased-audit-smoke": "swiftc -swift-version 5 ios/MobileInkModule/MobileInkBenchmarkRecorder.swift ios/MobileInkModule/MobileInkInteractionAudit.swift scripts/phased_audit_smoke.swift -o /tmp/mobile_ink_phased_audit_smoke && /tmp/mobile_ink_phased_audit_smoke",
-    "test:native:frame-acquisition-smoke": "swiftc -swift-version 5 ios/MobileInkModule/MobileInkFrameAcquisition.swift scripts/frame_acquisition_smoke.swift -o /tmp/mobile_ink_frame_acquisition_smoke && /tmp/mobile_ink_frame_acquisition_smoke"
+    "test:native:frame-acquisition-smoke": "swiftc -swift-version 5 ios/MobileInkModule/MobileInkFrameAcquisition.swift scripts/frame_acquisition_smoke.swift -o /tmp/mobile_ink_frame_acquisition_smoke && /tmp/mobile_ink_frame_acquisition_smoke",
+    "test:native:display-appearance-smoke": "clang++ -O2 -std=c++20 scripts/display_appearance_smoke.cpp cpp/DisplayAppearance.cpp -I cpp -I node_modules/@shopify/react-native-skia/cpp/skia node_modules/@shopify/react-native-skia/libs/apple/libskia.xcframework/macos-arm64_x86_64/libskia.a -framework ApplicationServices -framework CoreFoundation -framework CoreGraphics -framework CoreText -framework Foundation -framework QuartzCore -o /tmp/mobile_ink_display_appearance_smoke && /tmp/mobile_ink_display_appearance_smoke"
   },
   "peerDependencies": {
     "@shopify/react-native-skia": ">=2.0.0",
@@ -202,6 +205,20 @@
       "require": {
         "types": "./lib/typescript/commonjs/InfiniteInkCanvas.d.ts",
         "default": "./lib/commonjs/InfiniteInkCanvas.js"
+      }
+    },
+    "./display-image": {
+      "react-native": {
+        "types": "./lib/typescript/module/InkDisplayImage.d.ts",
+        "default": "./src/InkDisplayImage.tsx"
+      },
+      "import": {
+        "types": "./lib/typescript/module/InkDisplayImage.d.ts",
+        "default": "./lib/module/InkDisplayImage.js"
+      },
+      "require": {
+        "types": "./lib/typescript/commonjs/InkDisplayImage.d.ts",
+        "default": "./lib/commonjs/InkDisplayImage.js"
       }
     }
   },
