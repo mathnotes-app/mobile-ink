@@ -1,7 +1,6 @@
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Image as NativeImage, View, StyleSheet, type StyleProp, type ImageStyle } from 'react-native';
 import { Canvas, Image, RuntimeShader, Skia, useImage } from '@shopify/react-native-skia';
-import { useDerivedValue, useSharedValue } from 'react-native-reanimated';
 import { DARK_INK_IMAGE_SHADER, type InkDisplayAppearance } from './displayAppearance';
 
 export type InkDisplayImageProps = {
@@ -34,10 +33,10 @@ function DarkImage(props: InkDisplayImageProps) {
   const readError = useCallback(() => reportImageError(onError), [onError]);
   const image = useImage(uri, readError);
   const effect = useMemo(() => Skia.RuntimeEffect.Make(DARK_INK_IMAGE_SHADER), []);
-  const size = useSharedValue({ width: 0, height: 0 });
-  const width = useDerivedValue(() => size.value.width);
-  const height = useDerivedValue(() => size.value.height);
-  useEffect(() => { if (effect && image) onReady?.(); }, [effect, image, onReady]);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    if (effect && image && size.width > 0 && size.height > 0) onReady?.();
+  }, [effect, image, size, onReady]);
   useEffect(() => {
     if (!effect) {
       const error = new Error('Could not initialize diagram display contrast');
@@ -48,9 +47,14 @@ function DarkImage(props: InkDisplayImageProps) {
   if (!effect) return <View style={[style ?? StyleSheet.absoluteFillObject, { backgroundColor: '#FFFFFF' }]}>
     <AuthoredImage {...props} style={StyleSheet.absoluteFillObject} />
   </View>;
-  return <Canvas style={style ?? StyleSheet.absoluteFillObject} onSize={size}>
-    <Image image={image} x={0} y={0} width={width} height={height} fit="contain">
+  // Skia 2.2's onSize registration dereferences an unattached Fabric view.
+  // Measure the outer RN view instead; pan/zoom transforms do not relayout it.
+  return <View style={style ?? StyleSheet.absoluteFillObject} onLayout={event => {
+    const { width, height } = event.nativeEvent.layout;
+    setSize(current => current.width === width && current.height === height ? current : { width, height });
+  }}><Canvas style={StyleSheet.absoluteFillObject} colorSpace="srgb">
+    <Image image={image} x={0} y={0} width={size.width} height={size.height} fit="contain">
       <RuntimeShader source={effect} />
     </Image>
-  </Canvas>;
+  </Canvas></View>;
 }

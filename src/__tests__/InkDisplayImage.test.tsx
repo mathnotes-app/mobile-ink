@@ -1,5 +1,5 @@
 import React from 'react';
-import { Image } from 'react-native';
+import { Image, View } from 'react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 import { Skia, useImage } from '@shopify/react-native-skia';
 import { InkDisplayImage } from '../InkDisplayImage';
@@ -43,7 +43,12 @@ it('does not announce a dark diagram ready until its original pixels load', () =
   expect(ready).not.toHaveBeenCalled();
   (useImage as jest.Mock).mockReturnValue({ pixels: 'authored' });
   screen.rerender(<InkDisplayImage uri="file:///diagram.png" displayAppearance="dark" onReady={ready} />);
+  expect(ready).not.toHaveBeenCalled();
+  const wrapper = screen.UNSAFE_getAllByType(View).find(view => view.props.onLayout);
+  fireEvent(wrapper!, 'layout', { nativeEvent: { layout: { width: 140, height: 100 } } });
   expect(ready).toHaveBeenCalledTimes(1);
+  expect(screen.getByTestId('diagram-pixels').props.width).toBe(140);
+  expect(screen.getByTestId('diagram-pixels').props.height).toBe(100);
   expect(useImage).toHaveBeenLastCalledWith('file:///diagram.png', expect.any(Function));
 });
 
