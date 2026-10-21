@@ -2,6 +2,19 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [0.3.10] - 2026-10-19
+
+- Prepare Ganesh contexts and common shader programs on a bounded background queue, then transfer ownership before the first native presentation. Keep loading UI responsive and preserve CPU fallback when preparation fails; closing a canvas settles pending native load callbacks.
+- Associate benchmark input samples with their encoded frame and recording session so delayed GPU completion callbacks cannot consume newer input or pollute a restarted recording.
+
+- Decode continuous notebooks once on the iOS background queue and hand prepared geometry to the canvas, avoiding combined-document base64 encoding and main-thread decoding on open.
+- Add opt-in native audit reports with independent main-queue heartbeat delays, render timing, and memory counters. Unattended UI tests can set `MOBILE_INK_AUDIT=1`; startup recording begins before native canvas construction; acknowledged gesture windows exclude XCTest accessibility queries without changing timing budgets. Reports contain no drawing or note content.
+- Support continuous-document overview rendering down to 25% zoom without truncating later pages at the native drawable limit.
+- Collect visible stroke candidates once per tile-render batch, preserving complete cached tiles for subsequent pans instead of scanning the entire notebook for each tile.
+- Keep iOS document extent and CPU upload buffers synchronized when a document grows or its crop changes without a Metal drawable-size callback.
+- Extend native checks for drawing on new pages, overview live input, partially visible tile reuse, and new strokes received while a dense notebook snapshot is encoded.
+- Let continuous-document hosts exclude selected overlay bodies and controls from viewport panning while keeping blank margins available for navigation.
+
 ## [0.3.9] - 2026-10-13
 
 - Saving no longer blocks pen input. iOS and Android copy the strokes on the drawing thread and serialize, base64-encode, and wrap the copy on a background thread. Previously the whole document was serialized on the UI (iOS main / Android GL) thread on every autosave, delaying strokes drawn during a save on dense notebooks.

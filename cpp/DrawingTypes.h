@@ -63,9 +63,9 @@ struct Stroke {
 // Zoom range the engine renders at. setRenderViewport clamps and buckets
 // into this range; ActiveStrokeRenderer anchors its preview surface with
 // the same bounds so the two never diverge.
-constexpr float kMinimumRenderScale = 1.0f;
+constexpr float kMinimumRenderScale = 0.25f;
 constexpr float kMaximumRenderScale = 5.0f;
-// Scales at or below this render 1:1; above it the scale-aware paths kick in.
+// Upper tolerance for identity rendering. Overview scales use scale-aware paths.
 constexpr float kIdentityRenderScaleThreshold = 1.01f;
 
 // Delta-based history. Each entry describes ONE operation that was

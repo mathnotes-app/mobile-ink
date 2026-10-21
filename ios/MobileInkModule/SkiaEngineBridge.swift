@@ -1,5 +1,8 @@
 import Foundation
 
+@_silgen_name("warmGaneshMetalContext")
+func warmGaneshMetalContext(_ context: OpaquePointer, _ device: UnsafeMutableRawPointer) -> Bool
+
 // MARK: - C++ Drawing Engine Bridge Declarations
 // These are Skia/C++ function declarations used by MobileInkCanvasView
 
@@ -229,6 +232,9 @@ func commitExternalEdit(_ engine: OpaquePointer, _ before: UnsafePointer<CChar>,
 func undoExternalEdit(_ engine: OpaquePointer) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("redoExternalEdit")
 func redoExternalEdit(_ engine: OpaquePointer) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("replaceDrawingSnapshot")
+func replaceDrawingSnapshot(_ engine: OpaquePointer, _ snapshot: UnsafeMutableRawPointer) -> Bool
 
 @_silgen_name("snapshotDrawing")
 func snapshotDrawing(_ engine: OpaquePointer) -> OpaquePointer?

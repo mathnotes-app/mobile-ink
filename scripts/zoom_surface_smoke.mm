@@ -59,7 +59,7 @@ SkBitmap renderCrop(SkiaDrawingEngine& engine, GrDirectContext* context, int wid
 
 void expectInk(const SkBitmap& pixels, int x, int y, bool ink, const char* label) {
     const auto color = pixels.getColor(x, y);
-    const bool actual = SkColorGetR(color) < 100 && SkColorGetG(color) < 100;
+    const bool actual = SkColorGetA(color) > 100 && SkColorGetR(color) < 100 && SkColorGetG(color) < 100;
     if (actual != ink) throw std::runtime_error(label);
 }
 
@@ -89,6 +89,87 @@ int main() {
             live.setRenderViewport(1, 0, 0, 512, 512);
             expectInk(render(live, nullptr), 100, 100, true, "Starting a stroke erased committed ink");
         }
+        // Continuous live ink stays intact across incremental GPU updates,
+        // context changes, and CPU capture while a stroke is still in flight.
+        SkiaDrawingEngine continuousLive(512, 4096, true);
+        continuousLive.setToolWithParams("pen", 12, 0x000000, "pixel");
+        continuousLive.setRenderViewport(2, 0, 0, 256, 256);
+        continuousLive.touchBegan(24, 80, 1);
+        int tip = 24;
+        for (auto* context : {first.get(), first.get(), second.get(),
+                              static_cast<GrDirectContext*>(nullptr), first.get(), first.get()}) {
+            const int previousTip = tip;
+            for (int point = 0; point < 8; ++point) {
+                tip += 4;
+                continuousLive.touchMoved(tip, 80, 1);
+            }
+            auto pixels = renderCrop(continuousLive, context, 512, 512);
+            expectInk(pixels, 64, 160, true, "Incremental update discarded earlier live ink");
+            expectInk(pixels, previousTip + tip, 160, true, "Incremental update lost new live ink");
+        }
+        continuousLive.touchEnded();
+        expectInk(renderCrop(continuousLive, nullptr, 512, 512), 200, 160, true,
+                  "GPU preview did not persist vector ink at touch-up");
+        {
+            auto cacheContext = makeContext();
+            SkiaDrawingEngine cachedPages(512, 4096, true);
+            cachedPages.setBackgroundType("pdf");
+            cachedPages.setToolWithParams("pen", 10, 0x000000, "pixel");
+            for (int page = 0; page < 8; ++page) {
+                cachedPages.touchBegan(40, page * 512 + 100, 1);
+                for (int x = 45; x <= 450; x += 5) cachedPages.touchMoved(x, page * 512 + 100, 1);
+                cachedPages.touchEnded();
+            }
+            for (int page = 0; page < 8; ++page) {
+                cachedPages.setRenderViewport(1, 0, page * 512, 512, 512);
+                expectInk(renderCrop(cachedPages, cacheContext.get(), 512, 512), 100, 100, true,
+                          "Resolving cached tiles lost ink");
+            }
+            cachedPages.clear();
+            cachedPages.setRenderViewport(1, 0, 0, 512, 512);
+            auto cleared = renderCrop(cachedPages, cacheContext.get(), 512, 512);
+            if (SkColorGetA(cleared.getColor(100, 100)) != 0)
+                throw std::runtime_error("Reused resolved tile retained deleted ink");
+            cacheContext->freeGpuResources();
+            size_t retainedBytes = 0;
+            cacheContext->getResourceCacheUsage(nullptr, &retainedBytes);
+            // Eight 1 MiB images plus backend overhead fit comfortably here.
+            // Retaining their four-sample render targets exceeds this bound.
+            if (retainedBytes > 16 * 1024 * 1024)
+                throw std::runtime_error("Tile images retained multisampled render attachments");
+        }
+        // An overview must render every visible page, including newly grown
+        // pages, and keep a stroke crossing the divider intact.
+        SkiaDrawingEngine overview(512, 2048, true);
+        overview.setToolWithParams("pen", 16, 0x000000, "pixel");
+        overview.touchBegan(100, 450, 1);
+        for (int y = 455; y <= 620; y += 5) overview.touchMoved(100, y, 1);
+        overview.touchEnded();
+        overview.touchBegan(200, 1700, 1);
+        for (int x = 205; x <= 300; x += 5) overview.touchMoved(x, 1700, 1);
+        overview.touchEnded();
+        for (auto* context : {first.get(), static_cast<GrDirectContext*>(nullptr)}) {
+            overview.setRenderViewport(0.25f, 0, 0, 512, 2048);
+            const auto pixels = renderCrop(overview, context, 128, 512);
+            expectInk(pixels, 25, 120, true, "Overview lost upper crossing stroke");
+            expectInk(pixels, 25, 145, true, "Overview lost lower crossing stroke");
+            expectInk(pixels, 60, 425, true, "Overview clipped later page");
+        }
+        if (!overview.resizeDocument(512, 2560)) throw std::runtime_error("Document growth failed");
+        overview.setRenderViewport(0.25f, 0, 2048, 512, 512);
+        overview.touchBegan(100, 2200, 1);
+        for (int x = 105; x <= 300; x += 5) overview.touchMoved(x, 2200, 1);
+        expectInk(renderCrop(overview, nullptr, 128, 128), 40, 38, true, "Overview lost live input");
+        overview.touchEnded();
+        overview.setRenderViewport(0.25f, 0, 2048, 512, 512);
+        expectInk(renderCrop(overview, nullptr, 128, 128), 40, 38, true, "New page rejected drawing");
+        SkiaDrawingEngine partial(512, 512, true);
+        drawLine(partial);
+        partial.setRenderViewport(1, 0, 0, 64, 64);
+        renderCrop(partial, nullptr, 64, 64);
+        partial.setRenderViewport(1, 0, 80, 128, 64);
+        expectInk(renderCrop(partial, nullptr, 128, 64), 100, 20, true,
+                  "Panning into a cached partial tile lost ink");
         SkiaDrawingEngine engine(512, 512);
         drawLine(engine);
         engine.setRenderViewport(2, 0, 0, 512, 512);
@@ -161,6 +242,30 @@ int main() {
             const auto restored = nativedrawing::composeContinuousDocument(pages, 1000);
             if (serializer.serialize(restored) != originalBytes)
                 throw std::runtime_error("Page ownership roundtrip changed stroke geometry or ordering");
+            auto comparePreparedLoad = [&](const std::vector<nativedrawing::Stroke>& preparedStrokes) {
+                for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
+                    SkiaDrawingEngine decoded(512, 2000, true);
+                    SkiaDrawingEngine prepared(512, 2000, true);
+                    drawLine(prepared);
+                    prepared.setRenderViewport(1, 80, 850, 100, 300);
+                    renderCrop(prepared, context, 100, 300); // Populate the previous drawing's tiles.
+                    auto incoming = preparedStrokes;
+                    prepared.replaceDrawing(incoming);
+                    if (incoming.size() != 1 || !decoded.deserializeDrawing(serializer.serialize(preparedStrokes)))
+                        throw std::runtime_error("Prepared load did not swap its owned geometry");
+                    for (float scale : {0.25f, 0.5f, 1.0f, 2.0f, 5.0f}) {
+                        decoded.setRenderViewport(scale, 80, 850, 100, 300);
+                        prepared.setRenderViewport(scale, 80, 850, 100, 300);
+                        const auto expected = renderCrop(decoded, context, int(100 * scale), int(300 * scale));
+                        const auto actual = renderCrop(prepared, context, int(100 * scale), int(300 * scale));
+                        for (int y = 0; y < actual.height(); ++y)
+                            for (int x = 0; x < actual.width(); ++x)
+                                if (actual.getColor(x, y) != expected.getColor(x, y))
+                                    throw std::runtime_error("Prepared load changed crossing/erased ink pixels");
+                    }
+                }
+            };
+            comparePreparedLoad(restored);
             const auto exportPages = nativedrawing::projectContinuousDocumentPages(pages, 1000, {0, 1});
             for (int pageIndex = 0; pageIndex < 2; ++pageIndex) {
                 if (exportPages[pageIndex].size() != 2)
@@ -200,6 +305,7 @@ int main() {
             if (erasedRoundtrip[1].affectedStrokeIndices != strokes[1].affectedStrokeIndices ||
                 erasedRoundtrip[0].erasedBy[0].y != 1000)
                 throw std::runtime_error("Document partition lost eraser metadata");
+            comparePreparedLoad(erasedRoundtrip);
             auto corruptPages = pages;
             corruptPages[1].order[0] = corruptPages[0].order[0];
             bool rejected = false;

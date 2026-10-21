@@ -68,8 +68,8 @@ NSString* encodePage(const ContinuousDocumentPage& page, bool includeOrder) {
 }
 
 @protocol MobileInkDocumentLoader <NSObject>
-- (void)loadBase64Data:(NSNumber*)viewTag base64String:(NSString*)payload
-             callback:(RCTResponseSenderBlock)callback;
+- (void)loadPreparedDrawing:(NSNumber*)viewTag snapshot:(void*)snapshot
+                   callback:(RCTResponseSenderBlock)callback;
 // Main thread only; returns an owned std::vector<Stroke>* or NULL.
 - (void*)takeDrawingSnapshot:(NSNumber*)viewTag;
 @end
@@ -101,8 +101,8 @@ RCT_EXPORT_METHOD(composeDocument:(NSArray<NSString*>*)payloads
         reject(@"DOCUMENT_COMPOSE_FAILED", @"Unable to process drawing data", nil);
     }
 }
-// Compose off the UI thread, then reuse the canvas's confirmed asynchronous load.
-// The combined payload never becomes a JavaScript string.
+// Decode and compose off the UI thread, then swap the prepared geometry on the
+// main queue. No combined JSON/base64 encoding or second decode is necessary.
 RCT_EXPORT_METHOD(loadDocument:(nonnull NSNumber*)viewTag
                   payloads:(NSArray<NSString*>*)payloads
                   pageHeight:(double)pageHeight
@@ -112,26 +112,27 @@ RCT_EXPORT_METHOD(loadDocument:(nonnull NSNumber*)viewTag
         std::vector<nativedrawing::ContinuousDocumentPage> pages;
         pages.reserve(payloads.count);
         for (NSString* payload in payloads) pages.push_back(decodePage(payload));
-        nativedrawing::ContinuousDocumentPage document;
-        document.strokes = nativedrawing::composeContinuousDocument(pages, pageHeight);
-        NSString* payload = encodePage(document, false);
+        auto* prepared = new std::vector<nativedrawing::Stroke>(
+            nativedrawing::composeContinuousDocument(pages, pageHeight));
         dispatch_async(dispatch_get_main_queue(), ^{
             id<MobileInkDocumentLoader> loader = (id)[self.bridge moduleForName:@"MobileInkCanvasViewManager"];
-            if (![loader respondsToSelector:@selector(loadBase64Data:base64String:callback:)]) {
+            if (![loader respondsToSelector:@selector(loadPreparedDrawing:snapshot:callback:)]) {
                 reject(@"DOCUMENT_LOAD_UNAVAILABLE", @"MobileInkCanvasViewManager is unavailable", nil);
-                return;
+            } else {
+                [loader loadPreparedDrawing:viewTag snapshot:prepared callback:^(NSArray* result) {
+                    id error = result.count > 0 ? result[0] : nil;
+                    if ([error isKindOfClass:NSString.class]) {
+                        reject(@"DOCUMENT_LOAD_FAILED", error, nil);
+                    } else {
+                        resolve(@(result.count > 1 && [result[1] isKindOfClass:NSNumber.class] && [result[1] boolValue]));
+                    }
+                }];
             }
-            [loader loadBase64Data:viewTag base64String:payload callback:^(NSArray* result) {
-                id error = result.count > 0 ? result[0] : nil;
-                if ([error isKindOfClass:NSString.class]) {
-                    // A just-mounted React view can become ready before its tag
-                    // is registered. The caller retries false, never treats it as loaded.
-                    if ([error isEqual:@"View not found"]) resolve(@NO);
-                    else reject(@"DOCUMENT_LOAD_FAILED", error, nil);
-                } else {
-                    resolve(@(result.count > 1 && [result[1] isKindOfClass:NSNumber.class] && [result[1] boolValue]));
-                }
-            }];
+            // Swapping puts the old strokes into prepared. Release those on the
+            // background queue, including when a view disappeared before handoff.
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                delete prepared;
+            });
         });
     } catch (const std::exception& error) {
         reject(@"DOCUMENT_LOAD_FAILED", [NSString stringWithUTF8String:error.what()], nil);

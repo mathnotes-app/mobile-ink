@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <include/gpu/ganesh/SkSurfaceGanesh.h>
 
 namespace nativedrawing {
 namespace {
@@ -10,7 +11,7 @@ constexpr size_t kMaxStrokeTileCacheBytes = 96 * 1024 * 1024;
 
 int renderScaleBucket(float scale) {
     const float clamped = std::max(kMinimumRenderScale, std::min(kMaximumRenderScale, scale));
-    const float buckets[] = {1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f, 5.0f};
+    const float buckets[] = {0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f, 5.0f};
     float bestBucket = buckets[0];
     float bestDistance = std::fabs(clamped - bestBucket);
     for (float bucket : buckets) {
@@ -106,10 +107,25 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
     const StrokeTileKey& key,
     int tileWidth,
     int tileHeight,
-    float scale
+    float scale,
+    const std::vector<size_t>& candidates
 ) {
     SkImageInfo info = SkImageInfo::MakeN32Premul(tileWidth, tileHeight);
-    sk_sp<SkSurface> tileSurface = targetCanvas->makeSurface(info);
+    // Coverage AA on a single-sample target can rasterize each pressure path
+    // into a separate CPU mask. Multisampled tiles let Ganesh tessellate those
+    // paths on the GPU. Allocate the cache target first so allocation failure
+    // can fall back without retaining multisampled attachments in the cache.
+    sk_sp<SkSurface> tileSurface;
+    sk_sp<SkSurface> resolved;
+    if (auto* context = targetCanvas->recordingContext()) {
+        resolved = SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes, info, 0, nullptr);
+        if (resolved) {
+            tileSurface = SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes, info, 4, nullptr);
+            if (!tileSurface) tileSurface = resolved;
+        }
+    } else {
+        tileSurface = targetCanvas->makeSurface(info);
+    }
     if (!tileSurface) {
         tileSurface = SkSurfaces::Raster(info);
     }
@@ -131,7 +147,7 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
     const float tileBottom = static_cast<float>(key.tileY * kStrokeTileSize + tileHeight) / scale;
     SkRect tileBounds = SkRect::MakeLTRB(tileLeft, tileTop, tileRight, tileBottom);
 
-    for (size_t i = 0; i < strokes_.size(); ++i) {
+    for (size_t i : candidates) {
         const auto& stroke = strokes_[i];
         if (stroke.isEraser) {
             continue;
@@ -165,6 +181,15 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
         }
     }
 
+    if (resolved && resolved.get() != tileSurface.get()) {
+        // Cache resolved pixels independently. A snapshot of the multisampled
+        // render target can also retain its much larger MSAA attachment, which
+        // prevents Ganesh from reusing that attachment for the next tile.
+        SkPaint copyPaint;
+        copyPaint.setBlendMode(SkBlendMode::kSrc);
+        tileSurface->draw(resolved->getCanvas(), 0, 0, &copyPaint);
+        return resolved->makeImageSnapshot();
+    }
     return tileSurface->makeImageSnapshot();
 }
 
@@ -270,6 +295,10 @@ void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
         targetClip.right() / bucketScale, targetClip.bottom() / bucketScale
     );
     if (!visibleBounds.intersect(targetClip)) return;
+    // Collect once, only if a missing tile needs geometry. Scanning the entire
+    // lecture independently for every tile multiplies work as notes grow.
+    std::vector<size_t> candidates;
+    bool candidatesReady = false;
     const float visibleLeft = visibleBounds.left();
     const float visibleTop = visibleBounds.top();
     const float visibleRight = visibleBounds.right();
@@ -282,6 +311,11 @@ void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
     const int maxTileX = std::max(0, static_cast<int>(std::ceil(targetWidth / kStrokeTileSize)) - 1);
     const int maxTileY = std::max(0, static_cast<int>(std::ceil(targetHeight / kStrokeTileSize)) - 1);
 
+    // Cached tiles must contain their complete geometry, including portions
+    // outside this frame's clip that a later pan may expose.
+    const SkRect candidateBounds = SkRect::MakeLTRB(
+        startTileX * kStrokeTileSize / bucketScale, startTileY * kStrokeTileSize / bucketScale,
+        (endTileX + 1) * kStrokeTileSize / bucketScale, (endTileY + 1) * kStrokeTileSize / bucketScale);
     for (int tileY = std::min(startTileY, maxTileY); tileY <= std::min(endTileY, maxTileY); ++tileY) {
         for (int tileX = std::min(startTileX, maxTileX); tileX <= std::min(endTileX, maxTileX); ++tileX) {
             StrokeTileKey key{bucket, tileX, tileY, strokeTileEpoch_};
@@ -298,7 +332,18 @@ void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
 
             auto it = strokeTileCache_.find(key);
             if (it == strokeTileCache_.end()) {
-                sk_sp<SkImage> image = renderStrokeTile(canvas, key, tileWidth, tileHeight, bucketScale);
+                if (!candidatesReady) {
+                    for (size_t index = 0; index < strokes_.size(); ++index) {
+                        const auto& stroke = strokes_[index];
+                        if (stroke.isEraser) continue;
+                        SkRect bounds = stroke.path.getBounds();
+                        const float outset = std::max(8.0f, stroke.paint.getStrokeWidth() * 2.0f);
+                        bounds.outset(outset, outset);
+                        if (bounds.intersects(candidateBounds)) candidates.push_back(index);
+                    }
+                    candidatesReady = true;
+                }
+                sk_sp<SkImage> image = renderStrokeTile(canvas, key, tileWidth, tileHeight, bucketScale, candidates);
                 if (!image) {
                     continue;
                 }

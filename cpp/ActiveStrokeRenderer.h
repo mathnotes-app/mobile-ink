@@ -104,6 +104,7 @@ private:
     // Active stroke surface for incremental rendering
     sk_sp<SkSurface> activeStrokeSurface_;
     sk_sp<SkImage> cachedActiveSnapshot_;
+    const void* surfaceContext_ = nullptr;
 
     // Incremental rendering state
     size_t lastRenderedInputIndex_;
@@ -111,7 +112,7 @@ private:
     SkPoint lastLeftEdge_, lastRightEdge_;
     bool hasLastEdge_;
 
-    void ensureViewportAlignment(const ActiveStrokeViewport& viewport);
+    void ensureViewportAlignment(const ActiveStrokeViewport& viewport, SkCanvas* targetCanvas);
     // Maps logical coordinates onto the viewport-anchored surface. Callers
     // wrap the call in SkAutoCanvasRestore.
     void applySurfaceTransform(SkCanvas* surfaceCanvas) const;

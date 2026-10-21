@@ -3,6 +3,7 @@
 // like the live engine and must not observe strokes drawn after it was taken.
 
 #include <iostream>
+#include <chrono>
 #include <thread>
 
 #include "../cpp/DrawingSerialization.h"
@@ -58,11 +59,68 @@ void snapshotIgnoresLaterStrokes() {
   check(engine.serializeDrawing() != before, "live engine lost strokes drawn after capture");
 }
 
+void denseSnapshotKeepsNewInputIndependent() {
+  SkiaDrawingEngine engine(820, 106100, true);
+  for (int page = 0; page < 100; ++page)
+    for (int stroke = 0; stroke < 200; ++stroke)
+      drawStroke(engine, page * 1061.0f + 20 + stroke * 4.0f);
+  const auto start = std::chrono::steady_clock::now();
+  const auto snapshot = engine.snapshotDrawing();
+  const auto captured = std::chrono::steady_clock::now();
+  std::vector<uint8_t> encoded;
+  std::thread writer([&] { DrawingSerialization serializer; encoded = serializer.serialize(snapshot); });
+  for (int stroke = 0; stroke < 24; ++stroke) drawStroke(engine, 200 + stroke * 20);
+  writer.join();
+  std::vector<Stroke> decoded;
+  DrawingSerialization serializer;
+  check(serializer.deserialize(encoded, decoded), "dense save cannot be decoded");
+  check(decoded.size() == 20000, "background encoding changed its captured revision");
+  check(engine.snapshotDrawing().size() == 20024, "drawing during dense save lost new input");
+  std::cout << "Dense UI-thread snapshot ms: "
+    << std::chrono::duration<double, std::milli>(captured - start).count() << std::endl;
+}
+
+void preparedDrawingHandoffPreservesContentAndResetsHistory() {
+  SkiaDrawingEngine source(820, 106100, true);
+  for (int stroke = 0; stroke < 20000; ++stroke)
+    drawStroke(source, 20 + stroke * 4.0f);
+  const auto bytes = source.serializeDrawing();
+  std::vector<Stroke> prepared;
+  DrawingSerialization serializer;
+  std::thread decoder([&] {
+    check(serializer.deserialize(bytes, prepared), "prepared drawing cannot be decoded");
+  });
+  decoder.join();
+  SkiaDrawingEngine destination(820, 106100, true);
+  drawStroke(destination, 400);
+  const auto old = destination.serializeDrawing();
+  const auto start = std::chrono::steady_clock::now();
+  destination.replaceDrawing(prepared);
+  const auto installed = std::chrono::steady_clock::now();
+  check(destination.serializeDrawing() == bytes, "prepared handoff changed decoded geometry");
+  check(serializer.serialize(prepared) == old, "handoff did not return old strokes to its owner");
+  check(!destination.canUndo() && !destination.canRedo(), "prepared load retained previous history");
+  drawStroke(destination, 200);
+  destination.undo();
+  check(destination.serializeDrawing() == bytes, "undo after prepared load changed loaded ink");
+  destination.redo();
+  check(destination.snapshotDrawing().size() == 20001, "redo after prepared load lost new ink");
+  std::vector<Stroke> empty;
+  destination.replaceDrawing(empty);
+  check(destination.isEmpty() && !destination.canUndo() && !destination.canRedo(),
+        "empty prepared load did not clear drawing and history");
+  check(empty.size() == 20001, "empty handoff did not return previous content");
+  std::cout << "Dense prepared drawing handoff ms: "
+    << std::chrono::duration<double, std::milli>(installed - start).count() << std::endl;
+}
+
 }  // namespace
 
 int main() {
   snapshotEncodesLikeLiveEngine();
   snapshotIgnoresLaterStrokes();
+  denseSnapshotKeepsNewInputIndependent();
+  preparedDrawingHandoffPreservesContentAndResetsHistory();
   if (g_failures == 0) {
     std::cout << "Drawing snapshot smoke tests passed" << std::endl;
     return 0;

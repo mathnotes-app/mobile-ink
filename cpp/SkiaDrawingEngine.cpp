@@ -872,8 +872,14 @@ bool SkiaDrawingEngine::deserializeDrawing(const std::vector<uint8_t>& data) {
         return false;
     }
 
+    replaceDrawing(loadedStrokes);
+    return true;
+}
+
+void SkiaDrawingEngine::replaceDrawing(std::vector<Stroke>& preparedStrokes) {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
     cancelSelectionTransform();
-    strokes_ = std::move(loadedStrokes);
+    strokes_.swap(preparedStrokes);
     eraserCircles_.clear();  // Clear eraser circles when loading
     bakedCircleCount_ = 0;  // No circles to bake
     resetIndexedSelectionState();
@@ -882,7 +888,6 @@ bool SkiaDrawingEngine::deserializeDrawing(const std::vector<uint8_t>& data) {
     undoStack_.clear();
     redoStack_.clear();
     markStrokeCachesDirty();
-    return true;
 }
 
 bool SkiaDrawingEngine::canUndo() const {

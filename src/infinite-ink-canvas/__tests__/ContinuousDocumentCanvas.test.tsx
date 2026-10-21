@@ -7,10 +7,12 @@ const mockCapture = jest.fn(async (_count: number, _height: number) => ['first',
 const mockClear = jest.fn();
 const mockRecordExternal = jest.fn(async () => true);
 let mockProps: any;
+let mockViewportProps: any;
 jest.mock('react-native-gesture-handler', () => ({ GestureHandlerRootView: require('react-native').View }));
 jest.mock('../PageStack', () => ({ PageBackgrounds: () => null, PageBreaks: () => null }));
 jest.mock('../../ZoomableInkViewport', () => ({ __esModule: true,
   default: require('react').forwardRef((props: any, ref: any) => {
+    mockViewportProps = props;
     require('react').useImperativeHandle(ref, () => ({ setTransform: jest.fn() }));
     return <>{props.children}</>;
   }),
@@ -177,4 +179,14 @@ it('does not reparse the initial notebook when tools or viewport state rerender 
   expect(parse.mock.calls.filter(([input]) => input === raw)).toHaveLength(initialCalls);
   tree.unmount();
   parse.mockRestore();
+});
+
+it('excludes host overlay gestures from viewport panning while keeping blank margins available', async () => {
+  const blockedTouchRects = [{left: 100, top: 200, right: 400, bottom: 500}];
+  const tree = render(<ContinuousDocumentCanvas initialData={data} blockedTouchRects={blockedTouchRects}
+    toolState={{toolType: 'pen', width: 2, color: '#000000', eraserMode: 'pixel'}} />);
+  await act(async () => {});
+  expect(mockViewportProps.blockedTouchRects).toEqual(blockedTouchRects);
+  expect(mockViewportProps.singleFingerPanBlocked).toBe(false);
+  tree.unmount();
 });

@@ -43,6 +43,18 @@ jobs:
       - name: Test release automation
         run: npm run test:release
 
+      - name: Detect and reset native main-queue stalls
+        run: npm run test:native:heartbeat-smoke
+
+      - name: Verify native startup and acknowledged interaction windows
+        run: npm run test:native:phased-audit-smoke
+
+      - name: Test nonblocking drawable acquisition
+        run: npm run test:native:frame-acquisition-smoke
+
+      - name: Verify background GPU preparation and CPU/GPU color parity
+        run: npm run test:native:ganesh-preparation-smoke
+
       - name: Run native serialization smoke test
         run: npm run test:native:smoke
 
