@@ -1,6 +1,6 @@
 import Foundation
 
-// Keep one frame in flight, including the potentially blocking drawable wait.
+// Keep one acquisition/encoding in flight, including the blocking drawable wait.
 // Resource acquisition runs away from UIKit; delivery and rendering stay on main.
 final class MobileInkFrameAcquisition<Resource> {
   private let queue = DispatchQueue(label: "com.mathnotes.ink.drawable", qos: .userInteractive)
@@ -27,7 +27,7 @@ final class MobileInkFrameAcquisition<Resource> {
     return true
   }
 
-  // Called after GPU completion, or when a drawable cannot be submitted.
+  // Called after command-buffer submission, or when no drawable can be submitted.
   func finish() {
     lock.lock()
     pending = false

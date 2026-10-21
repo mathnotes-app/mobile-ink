@@ -65,6 +65,7 @@ class MobileInkCanvasView: MTKView {
     private var hasPresentedFrame = false
     private let frameAcquisition = MobileInkFrameAcquisition<CAMetalDrawable>()
     private var hasPendingFrame = false
+    private var isFrameScheduled = false
     private var pendingFrameRequestedAt: CFTimeInterval?
     var requestedRenderBackend: MobileInkRenderBackend = .ganesh
     let benchmarkRecorder: MobileInkBenchmarkRecorder
@@ -295,7 +296,7 @@ class MobileInkCanvasView: MTKView {
         self.isOpaque = false // Transparent to show background underneath
         self.backgroundColor = .clear
         self.framebufferOnly = false
-        self.enableSetNeedsDisplay = true
+        self.enableSetNeedsDisplay = false
         self.isPaused = true
         self.preferredFramesPerSecond = 120
 
@@ -543,11 +544,19 @@ class MobileInkCanvasView: MTKView {
         }
         hasPendingFrame = true
 
-        // Ink invalidation does not invalidate the separate paper/PDF view.
-        // Its content setters and UIView layout own background invalidation.
-        // In particular, zoom/viewport changes must not rerasterize a PDF
-        // on the main thread merely to present a sharper ink surface.
-        setNeedsDisplay()
+        // Acquisition is asynchronous, so own the on-demand frame loop rather
+        // than returning from an MTKView display callback before submission.
+        // Coalesce updates in this UI transaction without adding a display-cycle
+        // wait. The acquisition gate serializes encoding; Metal owns submitted frames.
+        // Paper/PDF invalidation remains owned by the separate background view.
+        guard !isFrameScheduled else { return }
+        isFrameScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isFrameScheduled = false
+            guard self.hasPendingFrame else { return }
+            self.draw(in: self)
+        }
     }
 
     private func setupSelectionToolbar() {
@@ -1919,6 +1928,10 @@ extension MobileInkCanvasView: MTKViewDelegate {
         guard !isReleased, drawingEngine != nil, window != nil,
               drawableSize.width > 0, drawableSize.height > 0,
               let metalLayer = layer as? CAMetalLayer else { return }
+        // MTKView normally synchronizes its layer during its display callback.
+        // The asynchronous on-demand loop must do that before acquiring a
+        // drawable; otherwise zoom receives textures with the previous size.
+        if metalLayer.drawableSize != drawableSize { metalLayer.drawableSize = drawableSize }
         hasPendingFrame = true
         if useExperimentalGaneshBackend {
             _ = ensureGaneshMetalContext()
@@ -1943,8 +1956,11 @@ extension MobileInkCanvasView: MTKViewDelegate {
             // Keep drawable waiting in the timing evidence even though it no
             // longer blocks input; moving a wait must not hide a late frame.
             let submitted = autoreleasepool { self.renderFrame(to: drawable, requestedAt: requestedAt) }
+            // Commit hands ownership to Metal. Allow the next acquisition
+            // while that command buffer executes; CAMetalLayer bounds queued
+            // GPU work to its drawable pool without blocking touch delivery.
+            self.frameAcquisition.finish()
             if !submitted {
-                self.frameAcquisition.finish()
                 self.hasPendingFrame = true
                 self.pendingFrameRequestedAt = requestedAt
                 self.retryPendingFrame()
@@ -1964,7 +1980,6 @@ extension MobileInkCanvasView: MTKViewDelegate {
         commandBuffer.addCompletedHandler { [weak self] completed in
             DispatchQueue.main.async {
                 guard let self, !self.isReleased else { return }
-                self.frameAcquisition.finish()
                 if completed.status == .error {
                     NSLog("[MobileInk] Metal frame failed: %@", completed.error?.localizedDescription ?? "unknown error")
                     if backend == .ganesh {
@@ -1974,7 +1989,9 @@ extension MobileInkCanvasView: MTKViewDelegate {
                         self.hasPendingFrame = true
                     }
                 }
-                if self.hasPendingFrame { self.requestDisplay(forceWhenSuspended: true) }
+                // Drain coalesced updates without another display-cycle wait.
+                // An existing acquisition remains gated.
+                if self.hasPendingFrame { self.draw(in: self) }
             }
         }
     }

@@ -26,7 +26,7 @@ struct FrameAcquisitionSmoke {
                  "Waiting for a drawable blocked the input queue")
     release.signal()
     spin(until: { delivered })
-    precondition(!frame.acquire({ 99 }, completion: { _ in fatalError("GPU still owns the frame") }))
+    precondition(!frame.acquire({ 99 }, completion: { _ in fatalError("Encoding still owns the acquisition") }))
     frame.finish()
 
     var emptyDelivered = false
@@ -54,7 +54,7 @@ struct FrameAcquisitionSmoke {
     }))
     unblock.signal()
     spin(until: { replacementDelivered })
-    print("Drawable waits leave main responsive; one frame stays in flight; nil and cancelled acquisitions recover")
+    print("Drawable waits leave main responsive; one acquisition stays in flight; nil and cancelled acquisitions recover")
   }
 
   private static func spin(until condition: () -> Bool) {
