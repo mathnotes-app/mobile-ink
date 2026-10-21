@@ -4,6 +4,7 @@
 #include <include/gpu/ganesh/GrDirectContext.h>
 
 extern "C" bool renderToGaneshMetalTexture(void*, void*, void*, int, int, bool);
+extern "C" bool renderToGaneshMetalTextureForDisplay(void*, void*, void*, int, int, bool, bool);
 
 // Called exclusively by the preparation queue before this context is handed
 // to the UI thread. Compile the live, tiled, clipped and compositing programs
@@ -52,6 +53,10 @@ extern "C" bool warmGaneshMetalContext(void* contextPtr, void* devicePtr) {
                 drawing.setRenderViewport(scale, 0, 0, 256, 256);
                 if (!render()) return false;
             }
+            // Compile the display-only contrast program before it can be
+            // selected by a theme change on the input thread.
+            if (!renderToGaneshMetalTextureForDisplay(&drawing, contextPtr,
+                (__bridge void*)texture, 256, 256, true, true)) return false;
             auto* handle = static_cast<sk_sp<GrDirectContext>*>(contextPtr);
             (*handle)->flushAndSubmit(GrSyncCpu::kYes);
             return true;

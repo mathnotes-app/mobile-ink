@@ -41,6 +41,7 @@ export const ContinuousEnginePool = memo(forwardRef<
   contentPadding,
   viewportTransform,
   renderScale,
+  displayAppearance,
   backgroundType,
   renderBackend = DEFAULT_NATIVE_INK_RENDER_BACKEND,
   pdfBackgroundBaseUri,
@@ -292,6 +293,7 @@ export const ContinuousEnginePool = memo(forwardRef<
           contentPadding={contentPadding}
           viewportTransform={viewportTransform}
           renderScale={renderScale}
+          displayAppearance={displayAppearance}
           backgroundType={backgroundType}
           renderBackend={renderBackend}
           pdfBackgroundBaseUri={pdfBackgroundBaseUri}
@@ -317,6 +319,7 @@ export const ContinuousEnginePool = memo(forwardRef<
   prev.contentPadding === next.contentPadding &&
   prev.viewportTransform === next.viewportTransform &&
   prev.renderScale === next.renderScale &&
+  prev.displayAppearance === next.displayAppearance &&
   prev.backgroundType === next.backgroundType &&
   prev.renderBackend === next.renderBackend &&
   prev.pdfBackgroundBaseUri === next.pdfBackgroundBaseUri &&

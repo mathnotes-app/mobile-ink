@@ -54,6 +54,13 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
   }
 
   // Background properties - forward to background view AND drawing view engine
+  @objc var displayAppearance: String? {
+    didSet {
+      drawingView?.darkDisplay = displayAppearance == "dark"
+      backgroundView?.isDarkMode = displayAppearance == "dark"
+    }
+  }
+
   @objc var backgroundType: String? {
     didSet {
       if let type = backgroundType {
@@ -131,6 +138,7 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
 
   func setDrawingView(_ view: MobileInkCanvasView) {
     self.drawingView = view
+    view.darkDisplay = displayAppearance == "dark"
     // Forward any properties that were set before the drawing view was added
     if let handler = onDrawingChange {
       view.onDrawingChange = handler
@@ -166,6 +174,7 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
 
   func setMobileInkBackgroundView(_ view: MobileInkBackgroundView) {
     self.backgroundView = view
+    view.isDarkMode = displayAppearance == "dark"
     view.isHidden = continuousDocument
     // Forward any properties that were set before the background view was added
     if let type = backgroundType {

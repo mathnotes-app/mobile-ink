@@ -68,3 +68,23 @@ The pool reuses native views for page changes. Heavy native state is released on
 `MobileInkFrameAcquisition` obtains `CAMetalLayer.nextDrawable()` on a serial queue. That call can wait for the presentation pool; it must not block UIKit touch handling. Rendering and engine mutation remain on the main thread, with one acquisition/encoding in flight until command-buffer submission. Metal's drawable pool bounds submitted GPU work while the next frame is acquired. Changes made while acquisition is pending are coalesced into the next frame. The view owns its on-demand scheduling and synchronizes the backing layer's drawable size before acquisition. A detached or resized view discards an obsolete drawable and retries while visible; release cancels pending delivery. GPU submission errors switch subsequent frames to the CPU renderer, retaining the old GPU context until its engine resources are destroyed.
 
 Native timing reports include acquisition wait in `renderMs`, so moving the wait off the input thread does not conceal late frames. `npm run test:native:frame-acquisition-smoke` checks responsiveness during a blocked provider, the in-flight limit, empty results, cancellation, and reuse. Native app interaction audits exercise drawing through autosave, pan/zoom, and view release with a dense notebook.
+
+### Display appearance
+
+`displayAppearance` defaults to `light`. Dark paper adapts ink at presentation,
+using HSL lightness inversion in linear RGB and a charcoal black point. Stored
+paints, page payloads, and export renderers keep authored colors. The native
+filter composes with the existing display channel-order filter, so it adds no
+compositing layer and leaves tile contents reusable across theme changes.
+`resolveInkDisplayAppearance` keeps document paper and ink in authored appearance
+when a newer JavaScript bundle runs on an older native binary. Controls can
+continue following the app theme independently.
+
+`inkDisplayColor` applies the same transform to app text and pen swatches.
+`@mathnotes/mobile-ink/display-image` provides `InkDisplayImage` for rendered
+diagrams; photos retain their authored appearance. Its shader matches native
+ink, retains alpha, and sizes on the UI thread during resizing. This separate
+entry avoids loading the Skia image UI in serialization-only consumers.
+`test:native:display-appearance-smoke` compares native and shader pixels.
+Apps pass display appearance explicitly to document overlays; offscreen exports
+use authored appearance. The iOS paper export path ignores display appearance.

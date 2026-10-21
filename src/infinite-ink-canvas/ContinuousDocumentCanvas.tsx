@@ -231,7 +231,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
     }
     callbacks.current.onTransformChange?.(next);
   }, [contentPadding, pageHeight, updateRenderTarget]);
-  return <GestureHandlerRootView style={[styles.root, props.style]}>
+  return <GestureHandlerRootView style={[styles.root, props.style, props.displayAppearance === 'dark' && { backgroundColor: '#171717' }]}>
     <ZoomableInkViewport ref={viewport} style={styles.viewport} minScale={props.minScale ?? 1} maxScale={props.maxScale ?? 5}
       contentWidth={pageWidth} contentHeight={documentHeight} contentPadding={contentPadding} isLandscape
       fingerDrawingEnabled={props.fingerDrawingEnabled} enableMomentumScroll lockHorizontalPanNearFit
@@ -240,9 +240,9 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
       onTransformChange={onTransform} onMotionStateChange={onMotionStateChange}>
       <View style={[styles.canvasShell, { paddingTop: contentPadding, paddingBottom: contentPadding }]}>
         <View testID="continuous-document-input" pointerEvents={inputReady ? "auto" : "none"} style={{ width: pageWidth, height: documentHeight }}>
-          <PageBackgrounds pages={pages} pageWidth={pageWidth} pageHeight={pageHeight} backgroundType={props.backgroundType ?? 'plain'}
+          <PageBackgrounds displayAppearance={props.displayAppearance} pages={pages} pageWidth={pageWidth} pageHeight={pageHeight} backgroundType={props.backgroundType ?? 'plain'}
             pdfBackgroundBaseUri={props.pdfBackgroundBaseUri} visiblePageIndex={visiblePage} showPageLabels={props.showPageLabels ?? true} />
-          <NativeInkCanvas ref={canvas} style={StyleSheet.absoluteFillObject} continuousDocument backgroundType="pdf"
+          <NativeInkCanvas displayAppearance={props.displayAppearance} ref={canvas} style={StyleSheet.absoluteFillObject} continuousDocument backgroundType="pdf"
             renderBackend={props.renderBackend} renderScale={renderTarget.renderScale}
             renderViewportLeftRatio={renderTarget.leftRatio} renderViewportTopRatio={renderTarget.topRatio}
             renderViewportWidthRatio={renderTarget.widthRatio} renderViewportHeightRatio={renderTarget.heightRatio}
@@ -283,7 +283,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
             }}
             onPencilDoubleTap={event => callbacks.current.onPencilDoubleTap?.(event)} />
           {props.overlay}
-          <PageBreaks pages={pages} pageHeight={pageHeight} />
+          <PageBreaks pages={pages} pageHeight={pageHeight} displayAppearance={props.displayAppearance} />
         </View>
       </View>
     </ZoomableInkViewport>

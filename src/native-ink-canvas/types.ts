@@ -14,6 +14,8 @@ export interface NativeInkCanvasProps {
   onSelectionChange?: (event: { nativeEvent: { count: number; bounds?: NativeSelectionBounds | null } }) => void;
   onCanvasReady?: () => void;
   backgroundType?: string;
+  /** Presentation only; persistence and exports retain authored colors. */
+  displayAppearance?: import('../displayAppearance').InkDisplayAppearance;
   pdfBackgroundUri?: string;
   renderSuspended?: boolean;
   /** iOS only: Chooses the native render path for A/B performance tests. */

@@ -74,6 +74,12 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     // When "pencilonly", only stylus touches are processed for drawing
     var drawingPolicy: String = "default"
     var renderBackend: String = "ganesh"
+    @Volatile var displayAppearance: String = "light"
+        set(value) {
+            if (field == value) return
+            field = value
+            requestInkRender()
+        }
     var continuousDocument: Boolean = false
         set(value) {
             if (field == value) return
@@ -456,7 +462,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         if (!makeRenderContextCurrent()) {
             return
         }
-        if (renderGaneshToCurrentSurface(engine, renderWidth, renderHeight)) {
+        if (renderGaneshToCurrentSurface(engine, renderWidth, renderHeight, displayAppearance == "dark")) {
             EGL14.eglSwapBuffers(eglDisplay, eglSurface)
         }
     }
@@ -1502,7 +1508,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     private external fun deserializeDrawing(engine: Long, data: ByteArray)
 
     // Rendering
-    private external fun renderGaneshToCurrentSurface(engine: Long, width: Int, height: Int): Boolean
+    private external fun renderGaneshToCurrentSurface(engine: Long, width: Int, height: Int, dark: Boolean): Boolean
     private external fun releaseGaneshContext(engine: Long)
     private external fun renderToPixelsScaled(engine: Long, bitmap: Bitmap, scale: Float)
 

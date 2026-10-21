@@ -56,6 +56,7 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
     contentPadding,
     viewportTransform,
     renderScale,
+    displayAppearance,
     backgroundType,
     renderBackend,
     pdfBackgroundBaseUri,
@@ -623,7 +624,7 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
             testID={`continuous-engine-pool-preview-${poolIndex}`}
           />
         ) : null}
-        <NativeInkCanvas
+        <NativeInkCanvas displayAppearance={displayAppearance}
           ref={setNativeCanvasRef}
           style={styles.nativeCanvas}
           drawingPolicy={drawingPolicy}
@@ -649,6 +650,7 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
   prev.contentPadding === next.contentPadding &&
   prev.viewportTransform === next.viewportTransform &&
   prev.renderScale === next.renderScale &&
+  prev.displayAppearance === next.displayAppearance &&
   prev.backgroundType === next.backgroundType &&
   prev.renderBackend === next.renderBackend &&
   prev.pdfBackgroundBaseUri === next.pdfBackgroundBaseUri &&

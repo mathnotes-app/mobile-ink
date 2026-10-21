@@ -68,6 +68,9 @@ class MobileInkCanvasView: MTKView {
     private var isFrameScheduled = false
     private var pendingFrameRequestedAt: CFTimeInterval?
     var requestedRenderBackend: MobileInkRenderBackend = .ganesh
+    var darkDisplay = false {
+        didSet { if oldValue != darkDisplay { requestDisplay() } }
+    }
     let benchmarkRecorder: MobileInkBenchmarkRecorder
     private let interactionAudit: MobileInkInteractionAudit?
     var isBenchmarkReplayRunning = false
@@ -2017,7 +2020,7 @@ extension MobileInkCanvasView: MTKViewDelegate {
            let commandQueue = commandQueue,
            let ganeshContext = ensureGaneshMetalContext() {
             let texturePtr = Unmanaged.passUnretained(freshDrawable.texture).toOpaque()
-            if renderToGaneshMetalTexture(engine, ganeshContext, texturePtr, width, height, usesCroppedViewport) {
+            if renderToGaneshMetalTextureForDisplay(engine, ganeshContext, texturePtr, width, height, usesCroppedViewport, darkDisplay) {
                 let renderDurationMs = (CACurrentMediaTime() - requestedAt) * 1000.0
                 guard let commandBuffer = commandQueue.makeCommandBuffer() else {
                     return false
@@ -2058,8 +2061,7 @@ extension MobileInkCanvasView: MTKViewDelegate {
         // Render Skia strokes to pixel buffer (no scaling - engine already in pixel coords)
         let canvas = createSkiaCanvas(UnsafeMutableRawPointer(buffer), width, height, Int32(bytesPerRow))
         if let canvas = canvas {
-            if usesCroppedViewport { renderVisibleViewportToCanvas(engine, canvas) }
-            else { renderToCanvas(engine, canvas) }
+            renderToDisplayCanvas(engine, canvas, usesCroppedViewport, darkDisplay)
             destroySkiaCanvas(canvas)
         }
 

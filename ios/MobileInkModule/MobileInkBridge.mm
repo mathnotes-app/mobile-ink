@@ -4,6 +4,7 @@
 // Just include our engine which has its own Skia includes
 #include "cpp/SkiaDrawingEngine.h"
 #include "cpp/DrawingSerialization.h"
+#include "cpp/DisplayAppearance.h"
 
 // Additional Skia includes for batch export PDF handling
 // Note: SkImages namespace functions are in SkImage.h
@@ -84,16 +85,9 @@ bool deserializeDrawingBytes(
     return serializer.deserialize(buffer, strokes);
 }
 
-void renderWithCpuColorOrdering(nativedrawing::SkiaDrawingEngine* engine, SkCanvas* canvas, bool cropped) {
-    float redBlueSwapMatrix[20] = {
-        0, 0, 1, 0, 0,
-        0, 1, 0, 0, 0,
-        1, 0, 0, 0, 0,
-        0, 0, 0, 1, 0
-    };
-
+void renderWithCpuColorOrdering(nativedrawing::SkiaDrawingEngine* engine, SkCanvas* canvas, bool cropped, bool dark) {
     SkPaint outputPaint;
-    outputPaint.setColorFilter(SkColorFilters::Matrix(redBlueSwapMatrix));
+    outputPaint.setColorFilter(nativedrawing::makeDisplayColorFilter(dark, true));
     canvas->saveLayer(nullptr, &outputPaint);
     if (cropped) engine->renderVisibleViewport(canvas);
     else engine->render(canvas);
@@ -388,6 +382,18 @@ void renderVisibleViewportToCanvas(void* engine, void* canvas) {
     if (engine && canvas) static_cast<SkiaDrawingEngine*>(engine)->renderVisibleViewport(static_cast<SkCanvas*>(canvas));
 }
 
+void renderToDisplayCanvas(void* engine, void* canvas, bool cropped, bool dark) {
+    if (!engine || !canvas) return;
+    auto* target = static_cast<SkCanvas*>(canvas);
+    auto* drawing = static_cast<SkiaDrawingEngine*>(engine);
+    SkPaint paint;
+    paint.setColorFilter(nativedrawing::makeDisplayColorFilter(dark, false));
+    if (dark) target->saveLayer(nullptr, &paint);
+    if (cropped) drawing->renderVisibleViewport(target);
+    else drawing->render(target);
+    if (dark) target->restore();
+}
+
 void renderToCanvasForExport(void* engine, void* canvas) {
     if (engine && canvas) static_cast<SkiaDrawingEngine*>(engine)->renderForExport(static_cast<SkCanvas*>(canvas));
 }
@@ -444,7 +450,7 @@ void destroyGaneshMetalContext(void* contextPtr) {
     delete contextHandle;
 }
 
-bool renderToGaneshMetalTexture(void* engine, void* contextPtr, void* texturePtr, int width, int height, bool cropped) {
+bool renderToGaneshMetalTextureForDisplay(void* engine, void* contextPtr, void* texturePtr, int width, int height, bool cropped, bool dark) {
     if (!engine || !contextPtr || !texturePtr || width <= 0 || height <= 0) {
         return false;
     }
@@ -478,9 +484,13 @@ bool renderToGaneshMetalTexture(void* engine, void* contextPtr, void* texturePtr
 
     SkCanvas* canvas = surface->getCanvas();
     canvas->clear(SK_ColorTRANSPARENT);
-    renderWithCpuColorOrdering(static_cast<SkiaDrawingEngine*>(engine), canvas, cropped);
+    renderWithCpuColorOrdering(static_cast<SkiaDrawingEngine*>(engine), canvas, cropped, dark);
     directContext->flushAndSubmit(surface.get());
     return true;
+}
+
+bool renderToGaneshMetalTexture(void* engine, void* contextPtr, void* texturePtr, int width, int height, bool cropped) {
+    return renderToGaneshMetalTextureForDisplay(engine, contextPtr, texturePtr, width, height, cropped, false);
 }
 
 void* createSkiaCanvas(void* pixels, int width, int height, int rowBytes) {

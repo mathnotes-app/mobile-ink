@@ -51,6 +51,8 @@ jobs:
 
       - name: Test nonblocking drawable acquisition
         run: npm run test:native:frame-acquisition-smoke
+      - name: Check display-only ink and image contrast
+        run: npm run test:native:display-appearance-smoke
 
       - name: Verify background GPU preparation and CPU/GPU color parity
         run: npm run test:native:ganesh-preparation-smoke
