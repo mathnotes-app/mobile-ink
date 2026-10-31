@@ -1627,6 +1627,10 @@ class MobileInkCanvasView: MTKView {
     }
 
     func resetTransientInteractionState() {
+        if let engine = drawingEngine {
+            if isMovingSelection { cancelSelectionMove(engine) }
+            if isTransformingSelection { cancelSelectionTransform(engine) }
+        }
         isDraggingSelection = false
         isMovingSelection = false
         isTransformingSelection = false
