@@ -71,9 +71,10 @@ class MobileInkCanvasView: MTKView {
         DispatchQueue.global(qos: .utility).async { warmCrayonTextures() }
     }()
     private static let imageLayerQueue = DispatchQueue(label: "MobileInk.imageLayers", qos: .userInitiated)
+    private static let eraserMaskQueue = DispatchQueue(label: "MobileInk.eraserMasks", qos: .utility)
     private static let imageCacheMemoryObserver = NotificationCenter.default.addObserver(
         forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil
-    ) { _ in clearDocumentImageCache() }
+    ) { _ in clearDocumentImageCache(); clearEraserMaskCache() }
     var drawingEngine: OpaquePointer?
     private var imageLayerRevision: UInt64 = 0
     private var imageLayerWork: ImageLayerWorkToken?
@@ -82,6 +83,10 @@ class MobileInkCanvasView: MTKView {
     private var imageAnimationLink: CADisplayLink?
     private var imageAnimationTarget: ImageAnimationTarget?
     private var imageFrameUpdatePending = false
+    private var eraserMaskRevision: UInt64 = 0
+    private var eraserMaskInFlight = false
+    private var eraserMaskRestart = false
+    private var eraserMaskScheduled: DispatchWorkItem?
     @objc var onImageLayersError: RCTDirectEventBlock?
     @objc var onImageLayersReady: RCTDirectEventBlock?
     @objc var documentImageLayersJSON: String? {
@@ -114,6 +119,46 @@ class MobileInkCanvasView: MTKView {
                 self.pendingImageLayers = prepared
                 self.pendingImageLayersJSON = json
                 self.installPendingImageLayers()
+            }
+        }
+    }
+
+    // Optimize copies away from the input/render thread. Each result is
+    // validated against current stroke geometry before it can be installed.
+    private func scheduleEraserMaskOptimization() {
+        eraserMaskRevision &+= 1
+        let revision = eraserMaskRevision
+        eraserMaskScheduled?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.startEraserMaskOptimization(revision) }
+        eraserMaskScheduled = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75, execute: work)
+    }
+
+    private func startEraserMaskOptimization(_ revision: UInt64) {
+        guard !isReleased, revision == eraserMaskRevision else { return }
+        if eraserMaskInFlight { eraserMaskRestart = true; return }
+        guard let engine = drawingEngine, let snapshot = snapshotEraserMasks(engine) else { return }
+        eraserMaskInFlight = true
+        advanceEraserMaskOptimization(snapshot, revision: revision)
+    }
+
+    private func advanceEraserMaskOptimization(_ snapshot: UnsafeMutableRawPointer, revision: UInt64) {
+        Self.eraserMaskQueue.async { [weak self] in
+            let result = optimizeNextEraserMask(snapshot)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { releaseEraserMaskSnapshot(snapshot); return }
+                guard !self.isReleased, revision == self.eraserMaskRevision,
+                      let engine = self.drawingEngine, result != 0 else {
+                    releaseEraserMaskSnapshot(snapshot)
+                    self.eraserMaskInFlight = false
+                    if !self.isReleased && self.eraserMaskRestart {
+                        self.eraserMaskRestart = false
+                        self.startEraserMaskOptimization(self.eraserMaskRevision)
+                    }
+                    return
+                }
+                if result == 1 { installOptimizedEraserMask(engine, snapshot) }
+                self.advanceEraserMaskOptimization(snapshot, revision: revision)
             }
         }
     }
@@ -533,6 +578,10 @@ class MobileInkCanvasView: MTKView {
     func releaseHeavyNativeState() {
         if isReleased { return }
         isReleased = true
+        eraserMaskRevision &+= 1
+        eraserMaskScheduled?.cancel()
+        eraserMaskScheduled = nil
+        eraserMaskRestart = false
         updateImageAnimationLink(false)
         imageLayerWork?.cancel()
         imageLayerWork = nil
@@ -1172,6 +1221,7 @@ class MobileInkCanvasView: MTKView {
             requestDisplay()
             notifySelectionChange()
             if didTransformSelection {
+                scheduleEraserMaskOptimization()
                 onDrawingChange?([:])
             }
         } else if isMovingSelection {
@@ -1190,6 +1240,7 @@ class MobileInkCanvasView: MTKView {
             requestDisplay()
             notifySelectionChange()
             if didMoveSelection {
+                scheduleEraserMaskOptimization()
                 onDrawingChange?([:])
             }
         } else if isSelectionMode && isDraggingSelection {
@@ -1213,6 +1264,9 @@ class MobileInkCanvasView: MTKView {
             requestDisplay()
             let completedTool = activeStrokeTool
             activeStrokeTool = nil
+            if completedTool == "eraser" && pendingEraserMode == "pixel" {
+                scheduleEraserMaskOptimization()
+            }
             if let completedTool { onDrawingChange?(["completedStrokeTool": completedTool]) }
             else { onDrawingChange?([:]) }
         }
@@ -1220,6 +1274,7 @@ class MobileInkCanvasView: MTKView {
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let engine = drawingEngine, let touch = touches.first else { return }
+        let cancelledTool = activeStrokeTool
         activeStrokeTool = nil
 
         // Filter touches based on drawing policy
@@ -1251,6 +1306,9 @@ class MobileInkCanvasView: MTKView {
             // Normal drawing mode
             clearPredictedPoints(engine)  // Clear predictions before cancelling
             touchEnded(engine, 0)
+            if cancelledTool == "eraser" && pendingEraserMode == "pixel" {
+                scheduleEraserMaskOptimization()
+            }
             requestDisplay()
             onDrawingChange?([:])
         }
@@ -1286,6 +1344,7 @@ class MobileInkCanvasView: MTKView {
         let hadSelection = getSelectionCount(engine) > 0
         let external = undoExternalEdit(engine)
         endSelectionInteractionAfterHistoryChange(hadSelection: hadSelection)
+        scheduleEraserMaskOptimization()
         requestDisplay()
         if let external {
             let payload = String(cString: external)
@@ -1301,6 +1360,7 @@ class MobileInkCanvasView: MTKView {
         let hadSelection = getSelectionCount(engine) > 0
         let external = redoExternalEdit(engine)
         endSelectionInteractionAfterHistoryChange(hadSelection: hadSelection)
+        scheduleEraserMaskOptimization()
         requestDisplay()
         if let external {
             let payload = String(cString: external)
@@ -1453,6 +1513,7 @@ class MobileInkCanvasView: MTKView {
         applyPendingTool(to: engine)
         notifySelectionChange()
         enqueueLoadPresentationCallback(callback)
+        scheduleEraserMaskOptimization()
     }
 
     @objc func loadBase64Data(_ base64String: String, callback: @escaping RCTResponseSenderBlock) {
@@ -1470,6 +1531,7 @@ class MobileInkCanvasView: MTKView {
 
         hasDeferredPresentation = false
         enqueueLoadPresentationCallback(callback)
+        scheduleEraserMaskOptimization()
     }
 
     @objc func stageBase64Data(_ base64String: String, callback: @escaping RCTResponseSenderBlock) {
@@ -1496,6 +1558,7 @@ class MobileInkCanvasView: MTKView {
         }
 
         enqueueLoadPresentationCallback(callback)
+        scheduleEraserMaskOptimization()
     }
 
     private func applyBase64Data(_ base64String: String) -> String? {

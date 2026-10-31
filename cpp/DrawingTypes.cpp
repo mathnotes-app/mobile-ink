@@ -37,6 +37,7 @@ void Stroke::ensureEraserCacheValid() const {
     // Always rebuild from scratch to match live eraser rendering exactly.
     cachedEraserPath.reset();
     cachedEraserCount = 0;
+    cachedEraserOptimized = false;
 
     if (erasedBy.empty()) {
         return;

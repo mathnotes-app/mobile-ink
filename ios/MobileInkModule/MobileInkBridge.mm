@@ -6,6 +6,7 @@
 #include "cpp/DrawingSerialization.h"
 #include "cpp/DisplayAppearance.h"
 #include "cpp/PathRenderer.h"
+#include "cpp/EraserMaskOptimization.h"
 
 // Additional Skia includes for batch export PDF handling
 // Note: SkImages namespace functions are in SkImage.h
@@ -225,6 +226,30 @@ using namespace nativedrawing;
 
 // C wrapper functions for Swift
 extern "C" {
+void* snapshotEraserMasks(void* engine) {
+    if (!engine) return nullptr;
+    try { return static_cast<SkiaDrawingEngine*>(engine)->snapshotEraserMasks().release(); }
+    catch (...) { NSLog(@"[MobileInk] Could not snapshot eraser masks for optimization"); return nullptr; }
+}
+
+int optimizeNextEraserMask(void* snapshot) {
+    if (!snapshot) return 0;
+    try { return nativedrawing::optimizeNextEraserMask(*static_cast<nativedrawing::EraserMaskOptimizationBatch*>(snapshot)); }
+    catch (...) { NSLog(@"[MobileInk] Could not optimize an eraser mask"); return 0; }
+}
+
+void installOptimizedEraserMask(void* engine, void* snapshot) {
+    if (!engine || !snapshot) return;
+    try {
+        static_cast<SkiaDrawingEngine*>(engine)->installOptimizedEraserMask(
+            *static_cast<nativedrawing::EraserMaskOptimizationBatch*>(snapshot));
+    } catch (...) { NSLog(@"[MobileInk] Could not install an optimized eraser mask"); }
+}
+
+void releaseEraserMaskSnapshot(void* snapshot) {
+    delete static_cast<nativedrawing::EraserMaskOptimizationBatch*>(snapshot);
+}
+void clearEraserMaskCache() { nativedrawing::clearEraserMaskOptimizationCache(); }
 uint64_t reserveDocumentLayerOrder(void* engine) {
     return engine ? static_cast<SkiaDrawingEngine*>(engine)->reserveLayerOrder() : 0;
 }

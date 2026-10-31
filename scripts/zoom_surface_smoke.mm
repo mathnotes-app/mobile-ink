@@ -1,5 +1,6 @@
 #include "ContinuousDocumentPages.h"
 #include "DrawingSerialization.h"
+#include "EraserMaskOptimization.h"
 #include "PathRenderer.h"
 #import <Metal/Metal.h>
 #include "../cpp/SkiaDrawingEngine.h"
@@ -12,6 +13,7 @@
 #include "include/gpu/ganesh/mtl/GrMtlBackendContext.h"
 #include "include/gpu/ganesh/mtl/GrMtlDirectContext.h"
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 using nativedrawing::SkiaDrawingEngine;
@@ -79,6 +81,56 @@ int main() {
     try {
         auto first = makeContext();
         auto second = makeContext();
+        {
+            nativedrawing::clearEraserMaskOptimizationCache();
+            nativedrawing::EraserMaskOptimizationBatch invalid;
+            invalid.candidates.emplace_back();
+            invalid.candidates.back().mask.erasedBy.push_back({0, 0, std::numeric_limits<float>::quiet_NaN()});
+            if (nativedrawing::optimizeNextEraserMask(invalid) != 2 ||
+                nativedrawing::optimizeNextEraserMask(invalid) != 0)
+                throw std::runtime_error("Invalid eraser masks were not skipped safely");
+            SkiaDrawingEngine document(512, 512, true);
+            drawLine(document);
+            auto original = document.snapshotDrawing();
+            for (int i = 0; i < 300; ++i)
+                original[0].erasedBy.push_back({200.f + 25.f * std::sin(i * .12f), 100.f + 12.f * std::cos(i * .12f), 8.f});
+            document.replaceDrawing(original);
+            auto before = document.serializeDrawing();
+            auto batch = document.snapshotEraserMasks();
+            if (!batch || nativedrawing::optimizeNextEraserMask(*batch) != 1)
+                throw std::runtime_error("Could not simplify a redundant eraser path");
+            if (!document.installOptimizedEraserMask(*batch) || before != document.serializeDrawing())
+                throw std::runtime_error("Optimizing an eraser path changed saved ink");
+            if (document.snapshotEraserMasks()) throw std::runtime_error("Optimized path was scheduled repeatedly");
+            if (!document.deserializeDrawing(before)) throw std::runtime_error("Could not reopen optimized test drawing");
+            auto reopened = document.snapshotEraserMasks();
+            if (!reopened || nativedrawing::optimizeNextEraserMask(*reopened) != 1 || reopened->cacheHits != 1 ||
+                !document.installOptimizedEraserMask(*reopened) || document.serializeDrawing() != before)
+                throw std::runtime_error("Reopening did not safely reuse the derived eraser mask");
+            nativedrawing::clearEraserMaskOptimizationCache();
+
+            // A result computed before another erasure must never overwrite
+            // the newer mask, even when it arrives late from the worker.
+            auto staleSource = document.snapshotDrawing();
+            staleSource[0].cachedEraserOptimized = false;
+            staleSource[0].cachedEraserCount = 0;
+            document.replaceDrawing(staleSource);
+            auto stale = document.snapshotEraserMasks();
+            if (!stale || nativedrawing::optimizeNextEraserMask(*stale) != 1)
+                throw std::runtime_error("Could not prepare stale mask test");
+            auto changedSameCount = document.snapshotDrawing();
+            changedSameCount[0].erasedBy[0].x += 1;
+            changedSameCount[0].cachedEraserCount = 0;
+            document.replaceDrawing(changedSameCount);
+            auto sameCountBytes = document.serializeDrawing();
+            if (document.installOptimizedEraserMask(*stale) || sameCountBytes != document.serializeDrawing())
+                throw std::runtime_error("A stale mask with the same circle count replaced a newer erasure");
+            document.setToolWithParams("eraser", 20, 0xff000000, "pixel");
+            document.touchBegan(200, 100, 1); document.touchMoved(210, 100, 1); document.touchEnded();
+            auto changed = document.serializeDrawing();
+            if (document.installOptimizedEraserMask(*stale) || changed != document.serializeDrawing())
+                throw std::runtime_error("A stale optimization replaced a newer erasure");
+        }
         for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
             SkiaDrawingEngine document(512, 512, true);
             document.setBackgroundType("pdf");
@@ -126,6 +178,83 @@ int main() {
         }
         // Compositing ink over inserted images depends on a truly transparent
         // native PNG, including after encoding and decoding the export.
+        // Appending crayon onto an already-composited tile must preserve the
+        // same ink, erasures, transparency, and image order as a fresh render.
+        for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
+            SkiaDrawingEngine cached(1024, 1024, true), fresh(1024, 1024, true);
+            cached.setBackgroundType("pdf"); fresh.setBackgroundType("pdf");
+            cached.setRenderViewport(1, 0, 0, 1024, 1024);
+            cached.setToolWithParams("pen", 18, 0xff1155bb, "pixel");
+            cached.touchBegan(30, 300, .7);
+            for (int x = 35; x < 950; x += 5) cached.touchMoved(x, 300 + 20 * std::sin(x * .02), .7);
+            cached.touchEnded();
+            auto seeded = cached.snapshotDrawing();
+            for (int i = 0; i < 1300; ++i) seeded[0].erasedBy.push_back({float(100 + i % 600), 300, 8});
+            cached.replaceDrawing(seeded);
+            auto imageSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(8, 8));
+            imageSurface->getCanvas()->clear(SkColorSetARGB(150, 220, 40, 80));
+            nativedrawing::ImageLayer image;
+            image.id = "image"; image.layerOrder = cached.reserveLayerOrder();
+            image.image = imageSurface->makeImageSnapshot(); image.bounds = SkRect::MakeXYWH(300, 260, 300, 100);
+            cached.setImageLayers({image});
+            (void)renderCrop(cached, context, 1024, 1024);
+            cached.setToolWithParams("crayon", 20, 0xff224466, "pixel");
+            for (int y : {300, 305, 310, 315, 320, 325, 330, 335}) {
+                cached.touchBegan(100, y, .7);
+                for (int x = 105; x < 900; x += 5) cached.touchMoved(x, y + 12 * std::sin(x * .03), .7);
+                cached.touchEnded();
+                (void)renderCrop(cached, context, 1024, 1024);
+            }
+            auto actual = renderCrop(cached, context, 1024, 1024);
+            auto saved = cached.snapshotDrawing(); fresh.replaceDrawing(saved); fresh.setImageLayers({image});
+            fresh.setRenderViewport(1, 0, 0, 1024, 1024);
+            auto expected = renderCrop(fresh, context, 1024, 1024);
+            size_t differenceCount = 0;
+            for (int y = 0; y < 1024; ++y) for (int x = 0; x < 1024; ++x) {
+                const auto a = actual.getColor(x, y), b = expected.getColor(x, y);
+                if (a != b) {
+                    ++differenceCount;
+                    const int delta = std::max({std::abs(int(SkColorGetA(a)) - int(SkColorGetA(b))),
+                        std::abs(int(SkColorGetR(a)) - int(SkColorGetR(b))),
+                        std::abs(int(SkColorGetG(a)) - int(SkColorGetG(b))),
+                        std::abs(int(SkColorGetB(a)) - int(SkColorGetB(b)))});
+                    if (!context || delta > 96) throw std::runtime_error("Incremental crayon tile changed visible ink");
+                }
+            }
+            // GPU resolve can shift a small number of antialiased edge pixels;
+            // the CPU result must remain exact and broad differences must fail.
+            if (differenceCount > 1024) throw std::runtime_error("Incremental crayon changed too many pixels");
+            cached.undo(); cached.redo();
+            actual = renderCrop(cached, context, 1024, 1024);
+            for (int y = 0; y < 1024; ++y) for (int x = 0; x < 1024; ++x) {
+                if (actual.getColor(x, y) != expected.getColor(x, y))
+                    throw std::runtime_error("Crayon tile undo/redo differs from a fresh render");
+            }
+            // Old cache epochs must not stall the next stroke after undo.
+            cached.undo();
+            cached.setToolWithParams("crayon", 12, 0xff000000, "pixel");
+            cached.touchBegan(80, 400, 1); cached.touchMoved(300, 400, 1); cached.touchEnded();
+            (void)renderCrop(cached, context, 1024, 1024);
+        }
+        {
+            SkiaDrawingEngine pending(256, 256, true), fresh(256, 256, true);
+            pending.setBackgroundType("pdf"); fresh.setBackgroundType("pdf");
+            pending.setRenderViewport(1, 0, 0, 256, 256);
+            pending.setToolWithParams("pen", 5, 0xff000000, "pixel");
+            pending.touchBegan(20, 180, 1); pending.touchMoved(100, 180, 1); pending.touchEnded();
+            (void)renderCrop(pending, nullptr, 256, 256);
+            pending.setToolWithParams("crayon", 8, 0xff000000, "pixel");
+            for (int i = 0; i < 130; ++i) {
+                pending.touchBegan(20, 20 + i, 1); pending.touchMoved(100, 20 + i, 1); pending.touchEnded();
+            }
+            auto actual = renderCrop(pending, nullptr, 256, 256);
+            auto saved = pending.snapshotDrawing(); fresh.replaceDrawing(saved);
+            fresh.setRenderViewport(1, 0, 0, 256, 256);
+            auto expected = renderCrop(fresh, nullptr, 256, 256);
+            for (int y = 0; y < 256; ++y) for (int x = 0; x < 256; ++x)
+                if (actual.getColor(x, y) != expected.getColor(x, y))
+                    throw std::runtime_error("A capped pending tile lost strokes");
+        }
         {
             SkiaDrawingEngine source(512, 512);
             drawLine(source);

@@ -37,6 +37,16 @@ func setHoldToShapeEnabled(_ engine: OpaquePointer, _ enabled: Bool)
 func setViewportMotionActive(_ engine: OpaquePointer, _ active: Bool)
 @_silgen_name("warmCrayonTextures")
 func warmCrayonTextures()
+@_silgen_name("snapshotEraserMasks")
+func snapshotEraserMasks(_ engine: OpaquePointer) -> UnsafeMutableRawPointer?
+@_silgen_name("optimizeNextEraserMask")
+func optimizeNextEraserMask(_ snapshot: UnsafeMutableRawPointer) -> Int32
+@_silgen_name("installOptimizedEraserMask")
+func installOptimizedEraserMask(_ engine: OpaquePointer, _ snapshot: UnsafeMutableRawPointer)
+@_silgen_name("releaseEraserMaskSnapshot")
+func releaseEraserMaskSnapshot(_ snapshot: UnsafeMutableRawPointer)
+@_silgen_name("clearEraserMaskCache")
+func clearEraserMaskCache()
 
 @_silgen_name("prepareDocumentImageLayers")
 func prepareDocumentImageLayers(_ json: UnsafePointer<CChar>, _ scale: Double) -> UnsafeMutableRawPointer?

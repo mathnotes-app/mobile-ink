@@ -236,6 +236,8 @@ bool SkiaDrawingEngine::applyPendingPixelEraseToStrokes() {
             circlesForStroke.begin(),
             circlesForStroke.end()
         );
+        stroke.cachedEraserCount = 0;
+        stroke.cachedEraserOptimized = false;
 
         // Refresh the visibility cache once per gesture so fully-erased
         // strokes stop responding to selection.

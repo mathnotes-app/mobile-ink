@@ -112,6 +112,17 @@ bool SkiaDrawingEngine::drawCachedStrokeTileFallback(
             }
         }
         if (!complete) continue;
+        for (int y = startY; complete && y <= endY; ++y) {
+            for (int x = startX; x <= endX; ++x) {
+                const StrokeTileKey sourceKey{bucket, x, y, key.epoch};
+                auto it = strokeTileCache_.find(sourceKey);
+                if (it == strokeTileCache_.end() || !applyAppendedStrokes(canvas, sourceKey, it->second)) {
+                    complete = false;
+                    break;
+                }
+            }
+        }
+        if (!complete) continue;
         canvas->save();
         canvas->clipRect(SkRect::MakeXYWH(key.tileX * kStrokeTileSize, key.tileY * kStrokeTileSize, tileWidth, tileHeight));
         canvas->scale(targetScale / sourceScale, targetScale / sourceScale);
@@ -127,6 +138,43 @@ bool SkiaDrawingEngine::drawCachedStrokeTileFallback(
         return true;
     }
     return false;
+}
+
+void SkiaDrawingEngine::appendStrokeToCachedTiles(const SkRect& bounds, size_t strokeIndex) {
+    if (bounds.isEmpty()) return;
+    for (auto it = strokeTileCache_.begin(); it != strokeTileCache_.end();) {
+        const auto& key = it->first;
+        auto& entry = it->second;
+        if (key.epoch != strokeTileEpoch_ || !entry.image) { ++it; continue; }
+        const float scale = key.scaleBucket / 100.0f;
+        const SkRect tile = SkRect::MakeLTRB(key.tileX * kStrokeTileSize / scale,
+            key.tileY * kStrokeTileSize / scale, (key.tileX + 1) * kStrokeTileSize / scale,
+            (key.tileY + 1) * kStrokeTileSize / scale);
+        if (SkRect::Intersects(tile, bounds)) {
+            if (entry.appendedStrokes.size() >= 128) {
+                strokeTileCacheBytes_ -= std::min(strokeTileCacheBytes_, entry.bytes);
+                it = strokeTileCache_.erase(it);
+                continue;
+            }
+            entry.appendedStrokes.push_back(strokeIndex);
+        }
+        ++it;
+    }
+}
+
+bool SkiaDrawingEngine::applyAppendedStrokes(SkCanvas* canvas, const StrokeTileKey& key, StrokeTileEntry& entry) {
+    if (entry.appendedStrokes.empty()) return true;
+    if (!entry.image) return false;
+    for (size_t index : entry.appendedStrokes) {
+        if (index >= strokes_.size() || strokes_[index].isEraser || !strokes_[index].erasedBy.empty()) return false;
+    }
+    std::unordered_map<size_t, sk_sp<SkPicture>> pictures;
+    auto image = renderStrokeTile(canvas, key, entry.image->width(), entry.image->height(),
+        key.scaleBucket / 100.0f, entry.appendedStrokes, pictures, entry.image);
+    if (!image) return false;
+    entry.image = std::move(image);
+    entry.appendedStrokes.clear();
+    return true;
 }
 
 void SkiaDrawingEngine::renderVisibleViewport(SkCanvas* canvas) {
@@ -195,7 +243,8 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
     int tileHeight,
     float scale,
     const std::vector<size_t>& candidates,
-    std::unordered_map<size_t, sk_sp<SkPicture>>& crayonPictures
+    std::unordered_map<size_t, sk_sp<SkPicture>>& crayonPictures,
+    const sk_sp<SkImage>& base
 ) {
     SkImageInfo info = SkImageInfo::MakeN32Premul(tileWidth, tileHeight);
     // Coverage AA on a single-sample target can rasterize each pressure path
@@ -222,6 +271,7 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
 
     SkCanvas* tileCanvas = tileSurface->getCanvas();
     tileCanvas->clear(SK_ColorTRANSPARENT);
+    if (base) tileCanvas->drawImage(base, 0, 0);
     tileCanvas->translate(
         static_cast<float>(-key.tileX * kStrokeTileSize),
         static_cast<float>(-key.tileY * kStrokeTileSize)
@@ -234,7 +284,7 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
     const float tileBottom = static_cast<float>(key.tileY * kStrokeTileSize + tileHeight) / scale;
     SkRect tileBounds = SkRect::MakeLTRB(tileLeft, tileTop, tileRight, tileBottom);
 
-    size_t imageIndex = 0;
+    size_t imageIndex = base ? imageLayers_.size() : 0;
     for (size_t i : candidates) {
         const auto& stroke = strokes_[i];
         if (stroke.isEraser) {
@@ -438,6 +488,11 @@ void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
             );
 
             auto it = strokeTileCache_.find(key);
+            if (it != strokeTileCache_.end() && !applyAppendedStrokes(canvas, key, it->second)) {
+                strokeTileCacheBytes_ -= std::min(strokeTileCacheBytes_, it->second.bytes);
+                strokeTileCache_.erase(it);
+                it = strokeTileCache_.end();
+            }
             if (it == strokeTileCache_.end()) {
                 if (viewportMotionActive_ && drawCachedStrokeTileFallback(canvas, key, tileWidth, tileHeight)) {
                     continue;

@@ -35,6 +35,7 @@ class EraserRenderer;
 class StrokeSplitter;
 class BatchExporter;
 class ActiveStrokeRenderer;
+struct EraserMaskOptimizationBatch;
 
 class SkiaDrawingEngine {
 public:
@@ -133,6 +134,8 @@ public:
     std::vector<uint8_t> serializeDrawing();
     // Copy committed strokes under the state lock; encode the independent copy off-thread.
     std::vector<Stroke> snapshotDrawing();
+    std::unique_ptr<EraserMaskOptimizationBatch> snapshotEraserMasks();
+    bool installOptimizedEraserMask(const EraserMaskOptimizationBatch& batch);
     bool deserializeDrawing(const std::vector<uint8_t>& data);
     // Swap already decoded geometry into the engine; caller retains old strokes.
     void replaceDrawing(std::vector<Stroke>& preparedStrokes);
@@ -270,6 +273,7 @@ private:
         sk_sp<SkImage> image;
         size_t bytes = 0;
         uint64_t lastUsed = 0;
+        std::vector<size_t> appendedStrokes;
     };
 
     std::unordered_map<StrokeTileKey, StrokeTileEntry, StrokeTileKeyHasher> strokeTileCache_;
@@ -369,7 +373,9 @@ private:
         const SkPaint& paint
     );
     const void* strokeTileContext_ = nullptr;
-    sk_sp<SkImage> renderStrokeTile(SkCanvas* targetCanvas, const StrokeTileKey& key, int tileWidth, int tileHeight, float scale, const std::vector<size_t>& candidates, std::unordered_map<size_t, sk_sp<SkPicture>>& crayonPictures);
+    sk_sp<SkImage> renderStrokeTile(SkCanvas* targetCanvas, const StrokeTileKey& key, int tileWidth, int tileHeight, float scale, const std::vector<size_t>& candidates, std::unordered_map<size_t, sk_sp<SkPicture>>& crayonPictures, const sk_sp<SkImage>& base = nullptr);
+    bool applyAppendedStrokes(SkCanvas* canvas, const StrokeTileKey& key, StrokeTileEntry& entry);
+    void appendStrokeToCachedTiles(const SkRect& bounds, size_t strokeIndex);
     sk_sp<SkPicture> crayonPicture(const Stroke& stroke, const SkPaint& paint);
     void pruneStrokeTileCache();
 

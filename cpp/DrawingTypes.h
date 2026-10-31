@@ -74,6 +74,7 @@ struct Stroke {
     // OPTIMIZATION: Cached eraser path for O(1) rendering instead of O(n) path ops per frame
     mutable SkPath cachedEraserPath;      // Union of all erasedBy circles
     mutable size_t cachedEraserCount = 0; // Track when to rebuild cache
+    mutable bool cachedEraserOptimized = false; // Derived only; never serialized
 
     // OPTIMIZATION: Cached visibility for O(1) selection instead of O(m*k) per frame
     mutable bool cachedHasVisiblePoints = true;  // True if any point is outside all eraser circles

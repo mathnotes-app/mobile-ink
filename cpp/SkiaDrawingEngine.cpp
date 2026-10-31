@@ -605,7 +605,12 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
         std::max(8.0f, stroke.paint.getStrokeWidth() * 2.0f),
         std::max(8.0f, stroke.paint.getStrokeWidth() * 2.0f)
     );
-    invalidateStrokeTilesForRect(appendedStrokeBounds);
+    if (viewportOnly_ && stroke.toolType == "crayon" && !stroke.isEraser &&
+        (imageLayers_.empty() || imageLayers_.back().layerOrder < stroke.layerOrder)) {
+        appendStrokeToCachedTiles(appendedStrokeBounds, strokes_.size() - 1);
+    } else {
+        invalidateStrokeTilesForRect(appendedStrokeBounds);
+    }
 
     // === FAST PATH: Composite active stroke directly ===
     // This preserves O(1) stroke completion for smooth performance.
