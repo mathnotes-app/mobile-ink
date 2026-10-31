@@ -20,6 +20,7 @@ void SkiaDrawingEngine::includeLayerOrder(uint64_t order) {
 
 void SkiaDrawingEngine::setImageLayers(std::vector<ImageLayer> images) {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+    selectionDragLayers_.clear();
     for (const auto& image : images) includeLayerOrder(image.layerOrder);
     std::stable_sort(images.begin(), images.end(), [](const auto& a, const auto& b) {
         return a.layerOrder < b.layerOrder;

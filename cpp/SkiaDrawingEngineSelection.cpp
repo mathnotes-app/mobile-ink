@@ -496,6 +496,12 @@ void SkiaDrawingEngine::endSelectionDrag() {
     nonSelectedSnapshot_ = nullptr;
     selectedSnapshot_ = nullptr;
     selectionHighlightSnapshot_ = nullptr;
+    selectionDragLayers_.clear();
+    selectionDragIndices_.clear();
+    selectionDragCoverage_ = SkRect::MakeEmpty();
+    selectionDragContext_ = nullptr;
+    selectionDragScale_ = 0;
+    selectionDragEpoch_ = 0;
 }
 
 int SkiaDrawingEngine::getSelectionCount() const {

@@ -146,6 +146,129 @@ int main() {
             if (renderCrop(document, context, 512, 512).getColor(250, 200) != SK_ColorRED)
                 throw std::runtime_error("Redo failed to restore the crayon cutout");
         }
+        // Selected and stationary runs can be interleaved with image layers.
+        // A cached drag must preserve that order, including after image edits.
+        for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
+            SkiaDrawingEngine document(512, 512, true);
+            document.setBackgroundType("pdf");
+            document.setRenderViewport(1, 0, 0, 512, 512);
+            auto line = [&](int y, uint32_t color) {
+                document.setToolWithParams("pen", 20, color, "pixel");
+                document.touchBegan(30, y, 1);
+                for (int x = 35; x <= 480; x += 5) document.touchMoved(x, y, 1);
+                document.touchEnded();
+            };
+            line(100, 0xff000000);
+            auto imageSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(8, 8));
+            imageSurface->getCanvas()->clear(SK_ColorRED);
+            nativedrawing::ImageLayer image;
+            image.id = "between-ink"; image.layerOrder = document.reserveLayerOrder();
+            image.image = imageSurface->makeImageSnapshot();
+            image.bounds = SkRect::MakeXYWH(80, 120, 350, 40);
+            document.setImageLayers({image});
+            line(200, 0xff0000ff);
+            line(260, 0xff000000);
+            const auto stationaryColor = renderCrop(document, context, 512, 512).getColor(250, 200);
+            if (!document.selectStrokeAt(250, 100) || !document.selectStrokeAt(250, 260))
+                throw std::runtime_error("Could not select interleaved ink for drag");
+            document.beginSelectionDrag();
+            document.moveSelection(0, 40);
+            auto pixels = renderCrop(document, context, 512, 512);
+            if (pixels.getColor(250, 140) != SK_ColorRED)
+                throw std::runtime_error("Moving older ink placed it above the image");
+            expectInk(pixels, 250, 300, true, "Moving newer ink lost it above the image");
+            if (pixels.getColor(250, 200) != stationaryColor)
+                throw std::runtime_error("Moving selection changed stationary ink");
+            imageSurface->getCanvas()->clear(SK_ColorYELLOW);
+            image.image = imageSurface->makeImageSnapshot();
+            document.setImageLayers({image});
+            pixels = renderCrop(document, context, 512, 512);
+            if (pixels.getColor(250, 140) != SK_ColorYELLOW)
+                throw std::runtime_error("Selection drag retained a stale image layer");
+            document.finalizeMove();
+            document.clearSelection();
+            pixels = renderCrop(document, context, 512, 512);
+            if (pixels.getColor(250, 140) != SK_ColorYELLOW)
+                throw std::runtime_error("Finalizing selection changed image order");
+            expectInk(pixels, 250, 300, true, "Finalizing selection lost moved ink");
+        }
+        // The cached selected run includes ink beyond the current viewport,
+        // since dragging can bring that ink into view.
+        for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
+            SkiaDrawingEngine document(1024, 1024, true);
+            document.setBackgroundType("pdf");
+            document.setRenderViewport(1, 0, 0, 512, 512);
+            document.setToolWithParams("pen", 12, 0xff000000, "pixel");
+            document.touchBegan(100, 220, 1);
+            for (int x = 105; x <= 900; x += 5) document.touchMoved(x, 220, 1);
+            document.touchEnded();
+            if (!document.selectStrokeAt(200, 220)) throw std::runtime_error("Cannot select offscreen-crossing ink");
+            document.beginSelectionDrag();
+            document.moveSelection(-400, 0);
+            expectInk(renderCrop(document, context, 512, 512), 450, 220, true,
+                "Selection drag did not bring offscreen ink into view");
+            document.endSelectionDrag();
+        }
+        // Very large selections must fall back to bounded direct rendering,
+        // rather than allocating a document-sized snapshot.
+        for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
+            SkiaDrawingEngine document(10000, 512, true);
+            document.setBackgroundType("pdf");
+            document.setRenderViewport(1, 0, 0, 512, 512);
+            document.setToolWithParams("pen", 12, 0xff000000, "pixel");
+            document.touchBegan(100, 220, 1);
+            for (int x = 110; x <= 9000; x += 10) document.touchMoved(x, 220, 1);
+            document.touchEnded();
+            if (!document.selectStrokeAt(200, 220)) throw std::runtime_error("Cannot select large ink");
+            document.beginSelectionDrag();
+            document.moveSelection(0, 30);
+            expectInk(renderCrop(document, context, 512, 512), 200, 250, true,
+                "Large selection fallback lost moved ink");
+            document.endSelectionDrag();
+        }
+        // Multiply-blended highlighter must blend against moving ink exactly
+        // as it does after the move is committed.
+        for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
+          for (bool withImage : {false, true}) {
+            SkiaDrawingEngine document(512, 512, true);
+            document.setBackgroundType("pdf");
+            document.setRenderViewport(1, 0, 0, 512, 512);
+            if (withImage) {
+                auto imageSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(8, 8));
+                imageSurface->getCanvas()->clear(SkColorSetARGB(255, 210, 180, 140));
+                nativedrawing::ImageLayer image;
+                image.id = "highlighter-background";
+                image.layerOrder = document.reserveLayerOrder();
+                image.image = imageSurface->makeImageSnapshot();
+                image.bounds = SkRect::MakeXYWH(0, 0, 512, 512);
+                document.setImageLayers({image});
+            }
+            document.setToolWithParams("pen", 20, 0xff2244cc, "pixel");
+            document.touchBegan(40, 180, 1);
+            for (int x = 45; x <= 460; x += 5) document.touchMoved(x, 180 + (x - 40) / 20.0f, 1);
+            document.touchEnded();
+            document.setToolWithParams("highlighter", 30, 0xffffff00, "pixel");
+            document.touchBegan(40, 205, 1);
+            for (int x = 45; x <= 460; x += 5) document.touchMoved(x, 205, 1);
+            document.touchEnded();
+            if (!document.selectStrokeAt(100, 183)) throw std::runtime_error("Cannot select ink under highlighter");
+            document.beginSelectionDrag();
+            document.moveSelection(0, 20);
+            auto dragging = renderCrop(document, context, 512, 512);
+            document.finalizeMove();
+            document.clearSelection();
+            auto committed = renderCrop(document, context, 512, 512);
+            for (int x : {130, 160, 190}) {
+                const int y = 200 + (x - 40) / 20;
+                const auto a = dragging.getColor(x, y), b = committed.getColor(x, y);
+                const int delta = std::max({std::abs(int(SkColorGetA(a)) - int(SkColorGetA(b))),
+                    std::abs(int(SkColorGetR(a)) - int(SkColorGetR(b))),
+                    std::abs(int(SkColorGetG(a)) - int(SkColorGetG(b))),
+                    std::abs(int(SkColorGetB(a)) - int(SkColorGetB(b)))});
+                if (delta > 8) throw std::runtime_error("Selection drag changed highlighter blending");
+            }
+          }
+        }
         {
             nativedrawing::clearEraserMaskOptimizationCache();
             nativedrawing::EraserMaskOptimizationBatch invalid;
@@ -745,6 +868,11 @@ int main() {
             expectInk(renderCrop(reloaded, context, 512, 512), 160, 150, true, "Continuous selection drag lost upper ink");
             expectInk(renderCrop(reloaded, context, 512, 512), 160, 250, true, "Continuous selection drag lost lower ink");
             expectInk(renderCrop(reloaded, context, 512, 512), 100, 250, false, "Continuous selection drag duplicated ink");
+            reloaded.endSelectionDrag();
+            expectInk(renderCrop(reloaded, context, 512, 512), 100, 250, true, "Cancelling selection move changed the original stroke");
+            expectInk(renderCrop(reloaded, context, 512, 512), 160, 250, false, "Cancelling selection move left a displaced preview");
+            reloaded.beginSelectionDrag();
+            reloaded.moveSelection(60, 0);
             reloaded.finalizeMove();
             reloaded.undo();
             if (!reloaded.selectStrokeAt(100, 50050)) throw std::runtime_error("Move undo did not restore crossing stroke");

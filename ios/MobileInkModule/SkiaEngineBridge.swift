@@ -191,6 +191,9 @@ func moveSelection(_ engine: OpaquePointer, _ dx: Float, _ dy: Float)
 @_silgen_name("finalizeMove")
 func finalizeMove(_ engine: OpaquePointer)
 
+@_silgen_name("cancelSelectionMove")
+func cancelSelectionMove(_ engine: OpaquePointer)
+
 @_silgen_name("beginSelectionTransform")
 func beginSelectionTransform(_ engine: OpaquePointer, _ handleIndex: Int32)
 

@@ -239,6 +239,21 @@ private:
     sk_sp<SkImage> selectedSnapshot_;           // Cache selected strokes for O(1) drag
     sk_sp<SkImage> selectionHighlightSnapshot_; // Cache selection highlight too
 
+    // Ordered snapshots for continuous-document selection drags. Keeping
+    // separate runs preserves image and ink stacking while selected runs move.
+    struct SelectionDragLayer {
+        sk_sp<SkImage> image;
+        SkRect bounds;
+        bool selected = false;
+        SkBlendMode blendMode = SkBlendMode::kSrcOver;
+    };
+    std::vector<SelectionDragLayer> selectionDragLayers_;
+    std::unordered_set<size_t> selectionDragIndices_;
+    SkRect selectionDragCoverage_ = SkRect::MakeEmpty();
+    const void* selectionDragContext_ = nullptr;
+    float selectionDragScale_ = 0;
+    uint64_t selectionDragEpoch_ = 0;
+
     // Offscreen surface for rendering strokes only (transparent background)
     // Background patterns are drawn directly to output canvas, not this surface
     sk_sp<SkSurface> strokeSurface_;
@@ -362,6 +377,7 @@ private:
     void markStrokeCachesDirty();
     void invalidateStrokeTilesForRect(const SkRect& bounds);
     void renderScaleAwareStrokes(SkCanvas* canvas);
+    bool renderCachedSelectionDrag(SkCanvas* canvas, float scale);
     bool drawCachedStrokeTileFallback(SkCanvas* canvas, const StrokeTileKey& key, int tileWidth, int tileHeight);
     void renderActiveContent(SkCanvas* canvas);
     // Draw points as a single constant-width stroked centerline (highlighter/

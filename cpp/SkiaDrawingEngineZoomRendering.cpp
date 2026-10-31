@@ -14,6 +14,31 @@ constexpr int kStrokeTileSize = 512;
 constexpr size_t kMaxStrokeTileCacheBytes = 96 * 1024 * 1024;
 constexpr size_t kMaxCrayonPictureCacheBytes = 32 * 1024 * 1024;
 
+enum class EraserMaskMode { none, clip, clearLayer };
+
+EraserMaskMode beginEraserMask(SkCanvas* canvas, const Stroke& stroke, const SkRect& bounds) {
+    if (stroke.erasedBy.empty()) return EraserMaskMode::none;
+    stroke.ensureEraserCacheValid();
+    if (stroke.cachedEraserPath.isEmpty()) return EraserMaskMode::none;
+    if (stroke.toolType == "crayon") {
+        // Apply the mask once instead of clipping every textured draw in the stroke.
+        canvas->saveLayer(&bounds, nullptr);
+        return EraserMaskMode::clearLayer;
+    }
+    canvas->save();
+    canvas->clipPath(stroke.cachedEraserPath, SkClipOp::kDifference);
+    return EraserMaskMode::clip;
+}
+
+void endEraserMask(SkCanvas* canvas, const Stroke& stroke, EraserMaskMode mode) {
+    if (mode == EraserMaskMode::clearLayer) {
+        SkPaint clearPaint;
+        clearPaint.setBlendMode(SkBlendMode::kClear);
+        canvas->drawPath(stroke.cachedEraserPath, clearPaint);
+    }
+    if (mode != EraserMaskMode::none) canvas->restore();
+}
+
 int renderScaleBucket(float scale) {
     const float clamped = std::max(kMinimumRenderScale, std::min(kMaximumRenderScale, scale));
     const float buckets[] = {0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f, 5.0f};
@@ -141,6 +166,7 @@ bool SkiaDrawingEngine::drawCachedStrokeTileFallback(
 }
 
 void SkiaDrawingEngine::appendStrokeToCachedTiles(const SkRect& bounds, size_t strokeIndex) {
+    selectionDragLayers_.clear();
     if (bounds.isEmpty()) return;
     for (auto it = strokeTileCache_.begin(); it != strokeTileCache_.end();) {
         const auto& key = it->first;
@@ -197,6 +223,7 @@ void SkiaDrawingEngine::markStrokeCachesDirty() {
 }
 
 void SkiaDrawingEngine::invalidateStrokeTilesForRect(const SkRect& bounds) {
+    selectionDragLayers_.clear();
     if (strokeTileCache_.empty() || bounds.isEmpty()) {
         return;
     }
@@ -305,26 +332,9 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
         uint8_t baseAlpha = stroke.paint.getAlpha();
         strokePaint.setAlpha(static_cast<uint8_t>(baseAlpha * stroke.originalAlphaMod));
 
-        bool needsClipRestore = false;
-        bool clearCrayonMask = false;
-        if (!stroke.erasedBy.empty()) {
-            stroke.ensureEraserCacheValid();
-            if (!stroke.cachedEraserPath.isEmpty()) {
-                if (stroke.toolType == "crayon") {
-                    // Apply the mask once to the finished crayon stroke. A
-                    // complex clip otherwise has to be prepared for each of
-                    // the textured stroke's many draw operations.
-                    SkRect layerBounds;
-                    if (!layerBounds.intersect(strokeBounds, tileBounds)) continue;
-                    tileCanvas->saveLayer(&layerBounds, nullptr);
-                    clearCrayonMask = true;
-                } else {
-                    tileCanvas->save();
-                    tileCanvas->clipPath(stroke.cachedEraserPath, SkClipOp::kDifference);
-                }
-                needsClipRestore = true;
-            }
-        }
+        SkRect layerBounds;
+        if (!layerBounds.intersect(strokeBounds, tileBounds)) continue;
+        const auto mask = beginEraserMask(tileCanvas, stroke, layerBounds);
 
         if (stroke.toolType == "crayon" && stroke.points.size() >= 64 && !tileBounds.contains(strokeBounds)) {
             auto it = crayonPictures.find(i);
@@ -338,14 +348,7 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
             renderStrokeGeometry(tileCanvas, stroke, strokePaint);
         }
 
-        if (clearCrayonMask) {
-            SkPaint clearPaint;
-            clearPaint.setBlendMode(SkBlendMode::kClear);
-            tileCanvas->drawPath(stroke.cachedEraserPath, clearPaint);
-        }
-        if (needsClipRestore) {
-            tileCanvas->restore();
-        }
+        endEraserMask(tileCanvas, stroke, mask);
     }
     while (imageIndex < imageLayers_.size()) renderImageLayer(tileCanvas, imageLayers_[imageIndex++]);
 
@@ -374,6 +377,126 @@ void SkiaDrawingEngine::pruneStrokeTileCache() {
     }
 }
 
+bool SkiaDrawingEngine::renderCachedSelectionDrag(SkCanvas* canvas, float scale) {
+    SkRect clip;
+    if (!canvas->getLocalClipBounds(&clip) || clip.isEmpty()) return false;
+    const void* context = canvas->recordingContext();
+    if (!selectionDragLayers_.empty() && selectionDragContext_ == context &&
+        selectionDragScale_ == scale && selectionDragEpoch_ == strokeTileEpoch_ &&
+        selectionDragIndices_ == selectedIndices_ && selectionDragCoverage_.contains(clip)) {
+        for (const auto& layer : selectionDragLayers_) {
+            canvas->save();
+            if (layer.selected) canvas->translate(selectionOffsetX_, selectionOffsetY_);
+            SkPaint paint;
+            paint.setBlendMode(layer.blendMode);
+            canvas->drawImageRect(layer.image, layer.bounds, SkSamplingOptions(SkFilterMode::kLinear), &paint);
+            canvas->restore();
+        }
+        return true;
+    }
+
+    selectionDragLayers_.clear();
+    struct Item { size_t index; bool image; };
+    struct Run { bool selected; SkBlendMode blend; SkRect bounds = SkRect::MakeEmpty(); std::vector<Item> items; };
+    std::vector<Run> runs;
+    // The stationary parts need only cover the current viewport. Selected ink
+    // must cover its full bounds so offscreen ink can move into view.
+    SkRect coverage = clip;
+    coverage.outset(2.0f / scale, 2.0f / scale);
+    auto append = [&](bool selected, bool isImage, size_t index, SkRect bounds, SkBlendMode blend) {
+        if (!selected && !bounds.intersect(coverage)) return;
+        if (bounds.isEmpty()) return;
+        // Multiply strokes need their own layers so they blend with all of the
+        // content beneath them, including ink that moves independently.
+        if (runs.empty() || runs.back().selected != selected ||
+            runs.back().blend != SkBlendMode::kSrcOver || blend != SkBlendMode::kSrcOver)
+            runs.push_back(Run{selected, blend});
+        auto& run = runs.back();
+        run.bounds.join(bounds);
+        run.items.push_back(Item{index, isImage});
+    };
+    auto appendImage = [&](size_t index) {
+        const auto& layer = imageLayers_[index];
+        if (layer.hidden || !layer.image) return;
+        SkMatrix rotation;
+        rotation.setRotate(layer.rotation, layer.bounds.centerX(), layer.bounds.centerY());
+        SkRect bounds = rotation.mapRect(layer.bounds);
+        bounds.outset(2, 2);
+        append(false, true, index, bounds, SkBlendMode::kSrcOver);
+    };
+    size_t imageIndex = 0;
+    for (size_t i = 0; i < strokes_.size(); ++i) {
+        const auto& stroke = strokes_[i];
+        while (imageIndex < imageLayers_.size() && imageLayers_[imageIndex].layerOrder <= stroke.layerOrder)
+            appendImage(imageIndex++);
+        SkRect bounds = stroke.path.getBounds();
+        const float outset = std::max(8.0f, stroke.paint.getStrokeWidth() * 2.0f);
+        bounds.outset(outset, outset);
+        const bool selected = selectedIndices_.count(i) > 0;
+        if (!selected && !SkRect::Intersects(bounds, coverage)) continue;
+        const auto blend = stroke.paint.asBlendMode();
+        if (!blend || (*blend != SkBlendMode::kSrcOver && *blend != SkBlendMode::kMultiply)) return false;
+        append(selected, false, i, bounds, *blend);
+    }
+    while (imageIndex < imageLayers_.size()) appendImage(imageIndex++);
+    if (runs.empty() || runs.size() > 32) return false;
+    // Bound both individual textures and the total transient allocation.
+    size_t totalBytes = 0;
+    for (auto& run : runs) {
+        const float left = std::floor(run.bounds.left() * scale);
+        const float top = std::floor(run.bounds.top() * scale);
+        const float right = std::ceil(run.bounds.right() * scale);
+        const float bottom = std::ceil(run.bounds.bottom() * scale);
+        if (!std::isfinite(left) || !std::isfinite(top) || !std::isfinite(right) || !std::isfinite(bottom) ||
+            right <= left || bottom <= top || right - left > 4096 || bottom - top > 4096) return false;
+        const size_t bytes = static_cast<size_t>(right - left) * static_cast<size_t>(bottom - top) * 4;
+        if (bytes > 64 * 1024 * 1024 - totalBytes) return false;
+        totalBytes += bytes;
+        run.bounds = SkRect::MakeLTRB(left / scale, top / scale, right / scale, bottom / scale);
+    }
+
+    std::vector<SelectionDragLayer> layers;
+    layers.reserve(runs.size());
+    for (const auto& run : runs) {
+        const int width = static_cast<int>(std::round(run.bounds.width() * scale));
+        const int height = static_cast<int>(std::round(run.bounds.height() * scale));
+        auto surface = canvas->makeSurface(SkImageInfo::MakeN32Premul(width, height));
+        if (!surface) return false;
+        auto* layerCanvas = surface->getCanvas();
+        layerCanvas->clear(SK_ColorTRANSPARENT);
+        layerCanvas->scale(scale, scale);
+        layerCanvas->translate(-run.bounds.left(), -run.bounds.top());
+        for (const auto& item : run.items) {
+            if (item.image) { renderImageLayer(layerCanvas, imageLayers_[item.index]); continue; }
+            const auto& stroke = strokes_[item.index];
+            SkPaint paint = stroke.paint;
+            if (!stroke.isEraser)
+                paint.setAlpha(static_cast<uint8_t>(stroke.paint.getAlpha() * stroke.originalAlphaMod));
+            bool clipped = false;
+            if (!stroke.erasedBy.empty()) {
+                stroke.ensureEraserCacheValid();
+                if (!stroke.cachedEraserPath.isEmpty()) {
+                    layerCanvas->save();
+                    layerCanvas->clipPath(stroke.cachedEraserPath, SkClipOp::kDifference);
+                    clipped = true;
+                }
+            }
+            renderStrokeGeometry(layerCanvas, stroke, paint);
+            if (clipped) layerCanvas->restore();
+        }
+        auto image = surface->makeImageSnapshot();
+        if (!image) return false;
+        layers.push_back(SelectionDragLayer{std::move(image), run.bounds, run.selected, run.blend});
+    }
+    selectionDragLayers_ = std::move(layers);
+    selectionDragIndices_ = selectedIndices_;
+    selectionDragCoverage_ = coverage;
+    selectionDragContext_ = context;
+    selectionDragScale_ = scale;
+    selectionDragEpoch_ = strokeTileEpoch_;
+    return renderCachedSelectionDrag(canvas, scale);
+}
+
 void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
     const float scale = std::max(kMinimumRenderScale, renderScale_);
 
@@ -396,6 +519,11 @@ void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
     if (!pendingDeleteIndices_.empty() || (viewportOnly_ && isDraggingSelection_)) {
         canvas->save();
         canvas->scale(scale, scale);
+        if (pendingDeleteIndices_.empty() && viewportOnly_ && isDraggingSelection_ &&
+            renderCachedSelectionDrag(canvas, scale)) {
+            canvas->restore();
+            return;
+        }
         SkRect clip;
         const bool hasClip = canvas->getLocalClipBounds(&clip);
         size_t imageIndex = 0;
@@ -420,19 +548,11 @@ void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
 
             canvas->save();
             if (translated) canvas->translate(selectionOffsetX_, selectionOffsetY_);
-            bool needsClipRestore = false;
-            if (!stroke.erasedBy.empty()) {
-                stroke.ensureEraserCacheValid();
-                if (!stroke.cachedEraserPath.isEmpty()) {
-                    canvas->save();
-                    canvas->clipPath(stroke.cachedEraserPath, SkClipOp::kDifference);
-                    needsClipRestore = true;
-                }
-            }
+            SkRect localBounds = stroke.path.getBounds();
+            localBounds.outset(outset, outset);
+            const auto mask = beginEraserMask(canvas, stroke, localBounds);
             renderStrokeGeometry(canvas, stroke, strokePaint);
-            if (needsClipRestore) {
-                canvas->restore();
-            }
+            endEraserMask(canvas, stroke, mask);
             canvas->restore();
         }
         while (imageIndex < imageLayers_.size()) renderImageLayer(canvas, imageLayers_[imageIndex++]);

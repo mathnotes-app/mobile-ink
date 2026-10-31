@@ -632,6 +632,12 @@ void finalizeMove(void* engine) {
     }
 }
 
+void cancelSelectionMove(void* engine) {
+    if (engine) {
+        static_cast<SkiaDrawingEngine*>(engine)->endSelectionDrag();
+    }
+}
+
 void beginSelectionTransform(void* engine, int handleIndex) {
     if (engine) {
         static_cast<SkiaDrawingEngine*>(engine)->beginSelectionTransform(handleIndex);

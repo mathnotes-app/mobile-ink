@@ -1022,7 +1022,6 @@ class MobileInkCanvasView: MTKView {
         guard let engine = drawingEngine, let touch = touches.first else { return }
 
         let location = touch.location(in: superview ?? self)
-        currentTouchLocation = location
         let scaledX = Float(location.x * scaleX)
         let scaledY = Float(location.y * scaleY)
 
@@ -1036,6 +1035,7 @@ class MobileInkCanvasView: MTKView {
             return
         }
 
+        currentTouchLocation = location
         // Update eraser cursor position
         updateEraserCursor(at: location, width: pendingWidth)
 
@@ -1298,10 +1298,13 @@ class MobileInkCanvasView: MTKView {
             notifySelectionChange()
         } else if isSelectionMode || isMovingSelection {
             // Cancel selection drag or move
+            if isMovingSelection { cancelSelectionMove(engine) }
             isDraggingSelection = false
             isMovingSelection = false
             hasSelectionMoveDelta = false
             lastDragPoint = nil
+            requestDisplay()
+            notifySelectionChange()
         } else {
             // Normal drawing mode
             clearPredictedPoints(engine)  // Clear predictions before cancelling
@@ -1631,6 +1634,7 @@ class MobileInkCanvasView: MTKView {
         hasSelectionMoveDelta = false
         isHoldToShapeStrokeActive = false
         lastDragPoint = nil
+        currentTouchLocation = nil
         // Hide the eraser cursor overlay so a pooled view reassigned to a new
         // page doesn't keep showing a stale cursor circle.
         updateEraserCursor(at: nil, width: 0)
