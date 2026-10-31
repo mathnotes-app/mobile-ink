@@ -150,6 +150,22 @@ it('routes external undo patches without dirtying ink or appending a page', asyn
   tree.unmount();
 });
 
+it('reports completed strokes without treating history or cancellation as a stroke', async () => {
+  const ended = jest.fn();
+  const tree = render(<ContinuousDocumentCanvas initialData={data} onStrokeEnd={ended}
+    toolState={{ toolType: 'eraser', width: 10, color: '#000000', eraserMode: 'pixel' }} />);
+  await act(async () => {});
+  act(() => {
+    mockProps.onDrawingBegin({ nativeEvent: { x: 10, y: 10 } });
+    mockProps.onDrawingChange({ nativeEvent: { completedStrokeTool: 'eraser' } });
+    mockProps.onDrawingChange({ nativeEvent: { historyAction: 'undo' } });
+    mockProps.onDrawingChange({ nativeEvent: {} });
+  });
+  expect(ended).toHaveBeenCalledTimes(1);
+  expect(ended).toHaveBeenCalledWith('eraser');
+  tree.unmount();
+});
+
 it('keeps persistence blocked after a failed replacement until a successful retry', async () => {
   const {ref, tree} = await setup();
   mockLoad.mockRejectedValueOnce(new Error('native load failed'));

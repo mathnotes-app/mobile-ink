@@ -46,6 +46,16 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
 
     // Tool state tracking
     private var currentToolType: String = "pen"
+    private var activeStrokeTool: String? = null
+    var holdToShapeEnabled: Boolean = true
+        set(value) {
+            field = value
+            if (!value) cancelHoldToShapePreview()
+            queueEvent {
+                if (drawingEngine != 0L) setHoldToShapeEnabledNative(drawingEngine, value)
+            }
+            requestInkRender()
+        }
     private var currentEraserMode: String = "pixel"
     private var currentStrokeWidth: Float = 3f
     private var currentStrokeColor: Int = android.graphics.Color.BLACK
@@ -434,6 +444,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         }
 
         drawingEngine = createDrawingEngine(width, height, continuousDocument)
+        if (drawingEngine != 0L) setHoldToShapeEnabledNative(drawingEngine, holdToShapeEnabled)
         engineWidth = width
         engineHeight = height
 
@@ -656,10 +667,10 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     }
 
     private fun canPreviewHoldToShape(): Boolean {
-        return currentToolType == "pen" ||
+        return holdToShapeEnabled && (currentToolType == "pen" ||
             currentToolType == "pencil" ||
             currentToolType == "marker" ||
-            currentToolType == "calligraphy"
+            currentToolType == "calligraphy")
     }
 
     private fun scheduleHoldToShapePreview() {
@@ -853,6 +864,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                activeStrokeTool = currentToolType
                 // For select tool, check if tapping inside existing selection to move it
                 if (currentToolType == "select" && drawingEngine != 0L) {
                     val selectionCount = getSelectionCount()
@@ -1053,8 +1065,11 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
                 }
                 requestInkRender()
                 if (currentToolType != "select") {
-                    sendEvent("onDrawingChange", Arguments.createMap())
+                    val payload = Arguments.createMap()
+                    if (!isCancel && activeStrokeTool != null) payload.putString("completedStrokeTool", activeStrokeTool)
+                    sendEvent("onDrawingChange", payload)
                 }
+                activeStrokeTool = null
             }
         }
 
@@ -1462,6 +1477,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     private external fun touchMoved(engine: Long, x: Float, y: Float, pressure: Float, azimuth: Float, altitude: Float, timestamp: Long, isStylusInput: Boolean)
     private external fun touchEnded(engine: Long, timestamp: Long)
     private external fun updateHoldShapePreview(engine: Long, timestamp: Long): Boolean
+    private external fun setHoldToShapeEnabledNative(engine: Long, enabled: Boolean)
 
     // Canvas operations
     private external fun clearDocumentPageNative(engine: Long, pageIndex: Int, pageHeight: Float): Boolean

@@ -94,6 +94,9 @@ class MobileInkCanvasView: MTKView {
     }
 
     private var documentSize: CGSize = .zero
+    private var targetRenderFrame: CGRect = .zero
+    private var targetRenderScale: CGFloat = 0
+    private var renderGeometryRevision: UInt64 = 0
     private var renderGeometryUpdatePending = false
     private var usesCroppedViewport: Bool { continuousDocument || abs(clampedRenderScale - 1) > 0.01 }
 
@@ -131,8 +134,15 @@ class MobileInkCanvasView: MTKView {
                 target.size.width = min(target.width, maxSide)
                 target.size.height = min(target.height, maxSide)
             }
-            if self.frame != target { self.frame = target }
-            self.applyDrawableContentScale(updateDrawableSize: true)
+            if self.targetRenderFrame != target || self.targetRenderScale != self.clampedRenderScale {
+                self.targetRenderFrame = target
+                self.targetRenderScale = self.clampedRenderScale
+                self.renderGeometryRevision &+= 1
+            }
+            // Keep the previously presented ink aligned with its old crop
+            // until the new crop is rendered and can be swapped atomically.
+            if !self.continuousDocument || !self.hasPresentedFrame { self.frame = target }
+            self.applyDrawableContentScale(updateDrawableSize: true, targetSize: target.size)
             self.syncContinuousEngineDocumentSize()
             self.applyRenderViewportToEngine()
             self.updateSelectionToolbarFrame()
@@ -158,6 +168,13 @@ class MobileInkCanvasView: MTKView {
 
     // Store pending tool settings to apply when engine is ready
     private var pendingTool: String = "pen"
+    private var activeStrokeTool: String?
+    var holdToShapeEnabled = true {
+        didSet {
+            if !holdToShapeEnabled { cancelHoldToShapePreview() }
+            if let engine = drawingEngine { setHoldToShapeEnabled(engine, holdToShapeEnabled); requestDisplay() }
+        }
+    }
     private var pendingWidth: Float = 3.0
     private var pendingColor: UInt32 = 0xFF000000  // Black
     private var pendingEraserMode: String = "pixel"
@@ -493,7 +510,7 @@ class MobileInkCanvasView: MTKView {
         window?.screen.scale ?? UIScreen.main.scale
     }
 
-    private func applyDrawableContentScale(updateDrawableSize: Bool) {
+    private func applyDrawableContentScale(updateDrawableSize: Bool, targetSize: CGSize? = nil) {
         let targetScale = baseContentScale() * clampedRenderScale
         if abs(contentScaleFactor - targetScale) > 0.001 {
             contentScaleFactor = targetScale
@@ -501,13 +518,14 @@ class MobileInkCanvasView: MTKView {
         if abs(layer.contentsScale - targetScale) > 0.001 {
             layer.contentsScale = targetScale
         }
-        guard updateDrawableSize, !isApplyingDrawableSize, bounds.width > 0, bounds.height > 0 else {
+        let size = targetSize ?? bounds.size
+        guard updateDrawableSize, !isApplyingDrawableSize, size.width > 0, size.height > 0 else {
             return
         }
 
         let targetDrawableSize = CGSize(
-            width: max(1.0, round(bounds.width * targetScale)),
-            height: max(1.0, round(bounds.height * targetScale))
+            width: max(1.0, round(size.width * targetScale)),
+            height: max(1.0, round(size.height * targetScale))
         )
         if abs(drawableSize.width - targetDrawableSize.width) > 0.5 ||
             abs(drawableSize.height - targetDrawableSize.height) > 0.5 {
@@ -530,13 +548,14 @@ class MobileInkCanvasView: MTKView {
         let width = min(CGFloat(enginePixelWidth) - left, widthRatio * CGFloat(enginePixelWidth))
         let height = min(CGFloat(enginePixelHeight) - top, heightRatio * CGFloat(enginePixelHeight))
 
+        let renderFrame = continuousDocument && !targetRenderFrame.isEmpty ? targetRenderFrame : frame
         setRenderViewport(
             engine,
             Float(actualRenderScale),
-            Float(continuousDocument ? frame.minX * baseContentScale() : left),
-            Float(continuousDocument ? frame.minY * baseContentScale() : top),
-            Float(max(1.0, continuousDocument ? frame.width * baseContentScale() : width)),
-            Float(max(1.0, continuousDocument ? frame.height * baseContentScale() : height))
+            Float(continuousDocument ? renderFrame.minX * baseContentScale() : left),
+            Float(continuousDocument ? renderFrame.minY * baseContentScale() : top),
+            Float(max(1.0, continuousDocument ? renderFrame.width * baseContentScale() : width)),
+            Float(max(1.0, continuousDocument ? renderFrame.height * baseContentScale() : height))
         )
     }
 
@@ -868,6 +887,7 @@ class MobileInkCanvasView: MTKView {
             requestDisplay()
         } else {
             // Normal drawing mode
+            activeStrokeTool = pendingTool
             let pressure = normalizedPressure(for: touch)
             let (azimuth, altitude) = extractAzimuthAndAltitude(for: touch)
             let isPencilInput = PencilStrokeInputNormalizer.isPencil(touch)
@@ -1047,12 +1067,16 @@ class MobileInkCanvasView: MTKView {
             touchEnded(engine, currentUptimeTimestampMillis())
             recordBenchmarkInputSample()
             requestDisplay()
-            onDrawingChange?([:])
+            let completedTool = activeStrokeTool
+            activeStrokeTool = nil
+            if let completedTool { onDrawingChange?(["completedStrokeTool": completedTool]) }
+            else { onDrawingChange?([:]) }
         }
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let engine = drawingEngine, let touch = touches.first else { return }
+        activeStrokeTool = nil
 
         // Filter touches based on drawing policy
         if shouldIgnoreTouchForDrawingPolicy(touch) {
@@ -1718,6 +1742,7 @@ class MobileInkCanvasView: MTKView {
             return
         }
 
+        setHoldToShapeEnabled(engine, holdToShapeEnabled)
         applyPendingBackgroundType(to: engine)
         applyRenderViewportToEngine()
 
@@ -1944,9 +1969,10 @@ extension MobileInkCanvasView: MTKViewDelegate {
 
         // MTKView.currentDrawable can wait a full second when the presentation
         // pool is exhausted. Never perform that wait on the Pencil/input thread.
+        let revision = renderGeometryRevision
         frameAcquisition.acquire({ metalLayer.nextDrawable() }) { [weak self] drawable in
             guard let self, !self.isReleased else { return }
-            guard let drawable, self.window != nil,
+            guard let drawable, self.window != nil, revision == self.renderGeometryRevision,
                   drawable.texture.width == Int(self.drawableSize.width),
                   drawable.texture.height == Int(self.drawableSize.height) else {
                 self.frameAcquisition.finish()
@@ -1954,15 +1980,18 @@ extension MobileInkCanvasView: MTKViewDelegate {
                 return
             }
             let requestedAt = self.pendingFrameRequestedAt ?? CACurrentMediaTime()
+            let geometrySwap = self.continuousDocument && self.frame != self.targetRenderFrame
+            let targetFrame = self.targetRenderFrame
             self.hasPendingFrame = false
             self.pendingFrameRequestedAt = nil
             // Keep drawable waiting in the timing evidence even though it no
             // longer blocks input; moving a wait must not hide a late frame.
-            let submitted = autoreleasepool { self.renderFrame(to: drawable, requestedAt: requestedAt) }
+            let submitted = autoreleasepool { self.renderFrame(to: drawable, requestedAt: requestedAt,
+                geometrySwap: geometrySwap, targetFrame: targetFrame, revision: revision) }
             // Commit hands ownership to Metal. Allow the next acquisition
             // while that command buffer executes; CAMetalLayer bounds queued
             // GPU work to its drawable pool without blocking touch delivery.
-            self.frameAcquisition.finish()
+            if !geometrySwap || !submitted { self.frameAcquisition.finish() }
             if !submitted {
                 self.hasPendingFrame = true
                 self.pendingFrameRequestedAt = requestedAt
@@ -1976,6 +2005,38 @@ extension MobileInkCanvasView: MTKViewDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + interval) { [weak self] in
             guard let self, !self.isReleased, self.hasPendingFrame, self.window != nil else { return }
             self.requestDisplay(forceWhenSuspended: true)
+        }
+    }
+
+    // A crop's image and its frame must appear in the same Core Animation
+    // transaction. Presenting an old drawable under a new frame stretches or
+    // shifts old ink for a few frames during a rapid pinch.
+    private func presentGeometryFrame(_ drawable: CAMetalDrawable, on commandBuffer: MTLCommandBuffer,
+                                      targetFrame: CGRect, revision: UInt64) {
+        commandBuffer.addCompletedHandler { [weak self] completed in
+            DispatchQueue.main.async {
+                guard let self, !self.isReleased else { return }
+                defer { self.frameAcquisition.finish() }
+                guard completed.status == .completed, self.window != nil,
+                      revision == self.renderGeometryRevision,
+                      let metalLayer = self.layer as? CAMetalLayer else {
+                    self.hasPendingFrame = true
+                    self.retryPendingFrame()
+                    return
+                }
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                metalLayer.presentsWithTransaction = true
+                self.frame = targetFrame
+                drawable.present()
+                CATransaction.commit()
+                metalLayer.presentsWithTransaction = false
+                let callbacks = self.pendingPresentedLoadCallbacks
+                self.pendingPresentedLoadCallbacks.removeAll()
+                if !callbacks.isEmpty { self.interactionAudit?.didPresentInitialLoad() }
+                callbacks.forEach { $0([NSNull(), true]) }
+                if self.hasPendingFrame { self.retryPendingFrame() }
+            }
         }
     }
 
@@ -1999,7 +2060,8 @@ extension MobileInkCanvasView: MTKViewDelegate {
         }
     }
 
-    private func renderFrame(to freshDrawable: CAMetalDrawable, requestedAt: CFTimeInterval) -> Bool {
+    private func renderFrame(to freshDrawable: CAMetalDrawable, requestedAt: CFTimeInterval,
+                             geometrySwap: Bool, targetFrame: CGRect, revision: UInt64) -> Bool {
         guard let engine = drawingEngine, !isReleased else { return false }
         // Cropping can resize the drawable without a delegate size callback.
         // Keep the CPU upload buffer in step with the actual Metal drawable.
@@ -2029,7 +2091,7 @@ extension MobileInkCanvasView: MTKViewDelegate {
                 pixelBuffer = nil
                 pixelBufferLength = 0
                 pixelBytesPerRow = 0
-                attachPresentedLoadCallbacks(to: commandBuffer)
+                if !geometrySwap { attachPresentedLoadCallbacks(to: commandBuffer) }
                 attachBenchmarkFrameCallback(
                     to: commandBuffer,
                     backend: .ganesh,
@@ -2037,7 +2099,11 @@ extension MobileInkCanvasView: MTKViewDelegate {
                     renderDurationMs: renderDurationMs
                 )
                 hasPresentedFrame = true
-                commandBuffer.present(freshDrawable)
+                if geometrySwap {
+                    presentGeometryFrame(freshDrawable, on: commandBuffer, targetFrame: targetFrame, revision: revision)
+                } else {
+                    commandBuffer.present(freshDrawable)
+                }
                 finishFrameAfterSubmission(commandBuffer, backend: .ganesh)
                 commandBuffer.commit()
                 return true
@@ -2075,7 +2141,7 @@ extension MobileInkCanvasView: MTKViewDelegate {
         )
         let renderDurationMs = (CACurrentMediaTime() - requestedAt) * 1000.0
 
-        attachPresentedLoadCallbacks(to: commandBuffer)
+        if !geometrySwap { attachPresentedLoadCallbacks(to: commandBuffer) }
         attachBenchmarkFrameCallback(
             to: commandBuffer,
             backend: .cpu,
@@ -2084,7 +2150,11 @@ extension MobileInkCanvasView: MTKViewDelegate {
         )
 
         hasPresentedFrame = true
-        commandBuffer.present(freshDrawable)
+        if geometrySwap {
+            presentGeometryFrame(freshDrawable, on: commandBuffer, targetFrame: targetFrame, revision: revision)
+        } else {
+            commandBuffer.present(freshDrawable)
+        }
         finishFrameAfterSubmission(commandBuffer, backend: .cpu)
         commandBuffer.commit()
         return true
@@ -2093,7 +2163,7 @@ extension MobileInkCanvasView: MTKViewDelegate {
 
 extension MobileInkCanvasView {
   private func canPreviewHoldToShape() -> Bool {
-    !isSelectionMode
+    holdToShapeEnabled && !isSelectionMode
       && !isTextMode
       && (pendingTool == "pen"
         || pendingTool == "pencil"

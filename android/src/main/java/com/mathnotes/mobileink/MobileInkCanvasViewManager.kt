@@ -55,6 +55,11 @@ class MobileInkCanvasViewManager(private val reactContext: ReactApplicationConte
         view.drawingPolicy = policy ?: "default"
     }
 
+    @ReactProp(name = "holdToShapeEnabled", defaultBoolean = true)
+    fun setHoldToShapeEnabled(view: MobileInkCanvasView, enabled: Boolean) {
+        view.holdToShapeEnabled = enabled
+    }
+
     @ReactProp(name = "renderSuspended")
     fun setRenderSuspended(view: MobileInkCanvasView, suspended: Boolean) {
         view.renderSuspended = suspended

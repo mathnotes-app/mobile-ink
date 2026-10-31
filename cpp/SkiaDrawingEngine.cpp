@@ -362,7 +362,7 @@ void SkiaDrawingEngine::touchEnded(long timestamp) {
 bool SkiaDrawingEngine::updateHoldShapePreview(long timestamp) {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
 
-    if (currentPoints_.empty() || currentTool_ == "select" || currentTool_ == "eraser") {
+    if (!holdToShapeEnabled_ || currentPoints_.empty() || currentTool_ == "select" || currentTool_ == "eraser") {
         clearActiveShapePreview();
         return false;
     }
@@ -398,6 +398,15 @@ bool SkiaDrawingEngine::updateHoldShapePreview(long timestamp) {
     activeStrokeRenderer_->reset();
 
     return true;
+}
+
+void SkiaDrawingEngine::setHoldToShapeEnabled(bool enabled) {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+    holdToShapeEnabled_ = enabled;
+    if (!enabled && hasActiveShapePreview_) {
+        clearActiveShapePreview();
+        activeStrokeRenderer_->reset();
+    }
 }
 
 bool SkiaDrawingEngine::updateActiveShapePreviewForPoint(float x, float y) {
@@ -535,7 +544,7 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
         shapeCandidate.recognized = true;
         shapeCandidate.toolType = activeShapePreviewToolType_;
         shapeCandidate.points = activeShapePreviewPoints_;
-    } else {
+    } else if (holdToShapeEnabled_) {
         shapeCandidate = recognizeHeldShape(currentPoints_, currentTool_, endTimestamp);
     }
 
@@ -631,8 +640,10 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
 
         // Track that we have composited strokes (for consistency check on tool switch)
         maxAffectedStrokeIndex_ = strokes_.size();
-    } else {
-        // Fallback for eraser or if surfaces unavailable
+    } else if (!viewportOnly_) {
+        // Full-page rendering needs a fresh stroke surface. Continuous
+        // documents have no such surface: their intersecting tiles were
+        // already invalidated above, and unrelated tiles remain valid.
         markStrokeCachesDirty();
     }
 

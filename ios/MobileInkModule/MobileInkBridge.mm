@@ -263,6 +263,10 @@ bool updateHoldShapePreview(void* engine, long timestamp) {
     return static_cast<SkiaDrawingEngine*>(engine)->updateHoldShapePreview(timestamp);
 }
 
+void setHoldToShapeEnabled(void* engine, bool enabled) {
+    if (engine) static_cast<SkiaDrawingEngine*>(engine)->setHoldToShapeEnabled(enabled);
+}
+
 // Predictive touch support for Apple Pencil low-latency rendering
 void clearPredictedPoints(void* engine) {
     if (engine) {

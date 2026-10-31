@@ -29,6 +29,9 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
   }
 
   // Event handlers - forward to drawing view
+  @objc var holdToShapeEnabled: Bool = true {
+    didSet { drawingView?.holdToShapeEnabled = holdToShapeEnabled }
+  }
   @objc var onDrawingChange: RCTDirectEventBlock? {
     didSet {
       drawingView?.onDrawingChange = onDrawingChange
@@ -138,6 +141,7 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
 
   func setDrawingView(_ view: MobileInkCanvasView) {
     self.drawingView = view
+    view.holdToShapeEnabled = holdToShapeEnabled
     view.darkDisplay = displayAppearance == "dark"
     // Forward any properties that were set before the drawing view was added
     if let handler = onDrawingChange {

@@ -471,6 +471,12 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_updateHoldShapePreview(
     return JNI_FALSE;
 }
 
+JNIEXPORT void JNICALL
+Java_com_mathnotes_mobileink_MobileInkCanvasView_setHoldToShapeEnabledNative(JNIEnv* env, jobject obj, jlong contextPtr, jboolean enabled) {
+    auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
+    if (ctx && ctx->engine) ctx->engine->setHoldToShapeEnabled(enabled == JNI_TRUE);
+}
+
 // Canvas operations
 JNIEXPORT jboolean JNICALL
 Java_com_mathnotes_mobileink_MobileInkCanvasView_clearDocumentPageNative(JNIEnv* env, jobject obj, jlong contextPtr, jint pageIndex, jfloat pageHeight) {

@@ -9,7 +9,7 @@ import type { NativeSelectionBounds } from "../types";
 
 export interface NativeInkCanvasProps {
   style?: ViewStyle;
-  onDrawingChange?: (event?: NativeSyntheticEvent<{ historyAction?: "undo" | "redo"; externalEdit?: { payload: string } }>) => void;
+  onDrawingChange?: (event?: NativeSyntheticEvent<{ historyAction?: "undo" | "redo"; externalEdit?: { payload: string }; completedStrokeTool?: string }>) => void;
   onDrawingBegin?: (event: NativeSyntheticEvent<{ x: number; y: number }>) => void;
   onSelectionChange?: (event: { nativeEvent: { count: number; bounds?: NativeSelectionBounds | null } }) => void;
   onCanvasReady?: () => void;
@@ -31,6 +31,8 @@ export interface NativeInkCanvasProps {
   renderViewportHeightRatio?: number;
   /** iOS only: Controls whether fingers or only Apple Pencil can draw */
   drawingPolicy?: "default" | "anyinput" | "pencilonly";
+  /** Whether holding a stroke converts it to a recognized shape. Defaults to true. */
+  holdToShapeEnabled?: boolean;
   /** iOS only: Fired when Apple Pencil barrel is double-tapped (2nd gen+) */
   onPencilDoubleTap?: (event: NativeSyntheticEvent<{ sequence: number; timestamp: number }>) => void;
 }

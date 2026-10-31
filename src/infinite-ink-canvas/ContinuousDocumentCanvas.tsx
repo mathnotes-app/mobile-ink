@@ -26,6 +26,8 @@ export type ContinuousDocumentCanvasProps = InfiniteInkCanvasProps & {
   blockedTouchRects?: TouchExclusionRect[];
   /** Called after the corresponding ink/overlay update has been delivered. */
   onHistoryAction?: (action: "undo" | "redo") => void;
+  /** A normal ink or eraser gesture completed, excluding cancelled gestures and history. */
+  onStrokeEnd?: (tool: string) => void;
 };
 
 /**
@@ -247,6 +249,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
             renderViewportLeftRatio={renderTarget.leftRatio} renderViewportTopRatio={renderTarget.topRatio}
             renderViewportWidthRatio={renderTarget.widthRatio} renderViewportHeightRatio={renderTarget.heightRatio}
             drawingPolicy={props.fingerDrawingEnabled ? 'anyinput' : 'pencilonly'} onCanvasReady={onReady}
+            holdToShapeEnabled={props.holdToShapeEnabled}
             onDrawingBegin={event => {
               revision.current++;
               drawingPage.current = Math.max(0, Math.min(pagesRef.current.length - 1, Math.floor(event.nativeEvent.y / pageHeight)));
@@ -272,6 +275,8 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
               }
               if (page) callbacks.current.onDrawingChange?.(page.id);
               if (action) callbacks.current.onHistoryAction?.(action);
+              const completedTool = event?.nativeEvent.completedStrokeTool;
+              if (completedTool) callbacks.current.onStrokeEnd?.(completedTool);
             }}
             onSelectionChange={({ nativeEvent: { count, bounds } }) => {
               const touchRect = selectionBoundsToTouchRect({ bounds: bounds ?? null, pageIndex: 0, pageWidth, pageHeight,

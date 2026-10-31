@@ -29,6 +29,7 @@ import {
   MobileInkModule,
   supportsRenderBackendProp,
   supportsInkDisplayAppearance,
+  supportsHoldToShapeProp,
 } from "./native-ink-canvas/nativeModules";
 import type {
   NativeInkCanvasProps,
@@ -617,6 +618,7 @@ export const NativeInkCanvas = forwardRef<
     pdfBackgroundUri: props.pdfBackgroundUri,
     renderSuspended: props.renderSuspended,
     drawingPolicy: props.drawingPolicy,
+    ...(supportsHoldToShapeProp ? { holdToShapeEnabled: props.holdToShapeEnabled ?? true } : {}),
     continuousDocument: props.continuousDocument ?? false,
     renderScale: props.renderScale ?? 1,
     renderViewportLeftRatio: props.renderViewportLeftRatio ?? 0,

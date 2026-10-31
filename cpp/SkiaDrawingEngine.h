@@ -47,6 +47,7 @@ public:
     void touchMoved(float x, float y, float pressure, float azimuth = 0.0f, float altitude = 1.57f, long timestamp = 0, bool isPencilInput = false);
     void touchEnded(long timestamp = 0);
     bool updateHoldShapePreview(long timestamp);
+    void setHoldToShapeEnabled(bool enabled);
 
     // Predictive touch support (Apple Pencil low-latency rendering)
     void clearPredictedPoints();  // Remove predicted points before adding new actual data
@@ -304,6 +305,7 @@ private:
     std::unique_ptr<ActiveStrokeRenderer> activeStrokeRenderer_;
 
     bool hasActiveShapePreview_ = false;
+    bool holdToShapeEnabled_ = true;
     std::string activeShapePreviewToolType_;
     std::vector<Point> activeShapePreviewPoints_;
     std::vector<Point> activeShapePreviewBasePoints_;

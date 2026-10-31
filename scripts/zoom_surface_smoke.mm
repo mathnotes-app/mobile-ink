@@ -111,6 +111,44 @@ int main() {
         expectInk(renderCrop(continuousLive, nullptr, 512, 512), 200, 160, true,
                   "GPU preview did not persist vector ink at touch-up");
         {
+            SkiaDrawingEngine held(512, 1024, true);
+            held.setToolWithParams("pen", 8, 0x000000, "pixel");
+            held.touchBegan(40, 100, 1, 0, 1.57, 100);
+            for (int x = 50; x <= 300; x += 10) held.touchMoved(x, 100, 1, 0, 1.57, 200);
+            if (!held.updateHoldShapePreview(600)) throw std::runtime_error("Held line was not recognized");
+            held.setHoldToShapeEnabled(false);
+            held.touchEnded(610);
+            std::vector<nativedrawing::Stroke> strokes;
+            nativedrawing::DrawingSerialization serializer;
+            if (!serializer.deserialize(held.serializeDrawing(), strokes) || strokes.size() != 1 || strokes[0].toolType != "pen")
+                throw std::runtime_error("Disabling shape recognition did not preserve the freehand stroke");
+        }
+        // Appending strokes must leave unrelated cached tiles intact while
+        // rebuilding affected tiles identically to a freshly loaded document.
+        for (auto* context : {first.get(), static_cast<GrDirectContext*>(nullptr)}) {
+            SkiaDrawingEngine cached(1024, 2048, true);
+            cached.setBackgroundType("pdf");
+            cached.setRenderViewport(1, 0, 0, 1024, 1024);
+            SkiaDrawingEngine fresh(1024, 2048, true);
+            fresh.setBackgroundType("pdf");
+            fresh.setRenderViewport(1, 0, 0, 1024, 1024);
+            for (int n = 0; n < 8; ++n) {
+                for (auto* engine : {&cached, &fresh}) {
+                    engine->setToolWithParams(n % 2 ? "highlighter" : "pen", 12, 0x1133CC, "pixel");
+                    engine->touchBegan(40 + n * 50, 80 + n * 65, 1);
+                    engine->touchMoved(300 + n * 50, 90 + n * 65, 1);
+                    engine->touchEnded();
+                }
+                (void)renderCrop(cached, context, 1024, 1024);
+            }
+            auto incremental = renderCrop(cached, context, 1024, 1024);
+            auto rebuilt = renderCrop(fresh, context, 1024, 1024);
+            for (int y = 0; y < 1024; ++y) for (int x = 0; x < 1024; ++x) {
+                if (incremental.getColor(x, y) != rebuilt.getColor(x, y))
+                    throw std::runtime_error("Cached tiles diverged from a fresh render");
+            }
+        }
+        {
             auto cacheContext = makeContext();
             SkiaDrawingEngine cachedPages(512, 4096, true);
             cachedPages.setBackgroundType("pdf");

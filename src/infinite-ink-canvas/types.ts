@@ -51,6 +51,7 @@ export type InfiniteInkCanvasProps = {
   renderBackend?: NativeInkRenderBackend;
   pdfBackgroundBaseUri?: string;
   fingerDrawingEnabled?: boolean;
+  holdToShapeEnabled?: boolean;
   toolState: ContinuousEnginePoolToolState;
   minScale?: number;
   maxScale?: number;
