@@ -117,6 +117,7 @@ int main() {
             for (int x = 50; x <= 300; x += 10) held.touchMoved(x, 100, 1, 0, 1.57, 200);
             if (!held.updateHoldShapePreview(600)) throw std::runtime_error("Held line was not recognized");
             held.setHoldToShapeEnabled(false);
+            if (held.updateHoldShapePreview(700)) throw std::runtime_error("Disabled shape preview reappeared");
             held.touchEnded(610);
             std::vector<nativedrawing::Stroke> strokes;
             nativedrawing::DrawingSerialization serializer;
@@ -124,7 +125,7 @@ int main() {
                 throw std::runtime_error("Disabling shape recognition did not preserve the freehand stroke");
         }
         // Appending strokes must leave unrelated cached tiles intact while
-        // rebuilding affected tiles identically to a freshly loaded document.
+        // rebuilding affected tiles identically to a fresh render.
         for (auto* context : {first.get(), static_cast<GrDirectContext*>(nullptr)}) {
             SkiaDrawingEngine cached(1024, 2048, true);
             cached.setBackgroundType("pdf");
