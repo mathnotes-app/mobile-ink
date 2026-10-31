@@ -1,8 +1,11 @@
 #include "ContinuousDocumentPages.h"
 #include "DrawingSerialization.h"
+#include "PathRenderer.h"
 #import <Metal/Metal.h>
 #include "../cpp/SkiaDrawingEngine.h"
+#include "include/core/SkBBHFactory.h"
 #include "include/core/SkBitmap.h"
+#include "include/core/SkPictureRecorder.h"
 #include "include/gpu/ganesh/GrDirectContext.h"
 #include "include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "include/gpu/ganesh/mtl/GrMtlBackendContext.h"
@@ -126,6 +129,63 @@ int main() {
         }
         // Appending strokes must leave unrelated cached tiles intact while
         // rebuilding affected tiles identically to a fresh render.
+        for (auto* context : {first.get(), static_cast<GrDirectContext*>(nullptr)}) {
+            std::vector<nativedrawing::Point> points;
+            for (int i = 0; i < 300; ++i) {
+                points.push_back({30.0f + i * 3.0f, 350.0f + 80.0f * std::sin(i * 0.07f),
+                    0.5f + 0.2f * std::sin(i * 0.03f), 0, 1.57f, 14, 0});
+            }
+            SkPaint paint; paint.setColor(SK_ColorBLUE); paint.setStrokeWidth(14);
+            nativedrawing::PathRenderer direct, recorded;
+            SkPictureRecorder recorder; SkRTreeFactory hierarchy;
+            auto* recording = recorder.beginRecording(SkRect::MakeWH(1024, 1024), &hierarchy);
+            recorded.drawCrayonPath(recording, points, paint, false);
+            auto picture = recorder.finishRecordingAsPicture();
+            for (int offset : {0, 512}) {
+                const auto info = SkImageInfo::MakeN32Premul(512, 512);
+                auto makeSurface = [&] { return context ? SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes, info) : SkSurfaces::Raster(info); };
+                auto a = makeSurface(), b = makeSurface();
+                if (!a || !b) throw std::runtime_error("Crayon comparison surface allocation failed");
+                a->getCanvas()->clear(SK_ColorTRANSPARENT); b->getCanvas()->clear(SK_ColorTRANSPARENT);
+                a->getCanvas()->translate(-offset, 0); b->getCanvas()->translate(-offset, 0);
+                direct.drawCrayonPath(a->getCanvas(), points, paint, false);
+                b->getCanvas()->drawPicture(picture);
+                SkBitmap x, y; x.allocPixels(info); y.allocPixels(info);
+                if (!a->readPixels(x, 0, 0) || !b->readPixels(y, 0, 0)) throw std::runtime_error("Crayon readback failed");
+                for (int row = 0; row < 512; ++row) for (int col = 0; col < 512; ++col) {
+                    if (x.getColor(col, row) != y.getColor(col, row))
+                        throw std::runtime_error("Recorded crayon differs from direct rendering");
+                }
+            }
+        }
+        for (auto* context : {first.get(), static_cast<GrDirectContext*>(nullptr)}) {
+            SkiaDrawingEngine moving(1024, 1024, true);
+            moving.setBackgroundType("pdf");
+            moving.setToolWithParams("pen", 12, 0x000000, "pixel");
+            moving.touchBegan(40, 100, 1);
+            for (int x = 50; x <= 900; x += 10) moving.touchMoved(x, 100, 1);
+            moving.touchEnded();
+            moving.setRenderViewport(1, 0, 0, 1024, 1024);
+            expectInk(renderCrop(moving, context, 1024, 1024), 400, 100, true, "Warm tile lost ink");
+            moving.setViewportMotionActive(true);
+            moving.setRenderViewport(2, 0, 0, 512, 512);
+            expectInk(renderCrop(moving, context, 1024, 1024), 800, 200, true, "Moving fallback lost ink");
+            moving.touchBegan(40, 200, 1);
+            for (int x = 50; x <= 400; x += 10) moving.touchMoved(x, 200, 1);
+            moving.touchEnded();
+            expectInk(renderCrop(moving, context, 1024, 1024), 400, 400, true, "Moving fallback reused stale ink after an edit");
+            moving.setViewportMotionActive(false);
+            auto settled = renderCrop(moving, context, 1024, 1024);
+            SkiaDrawingEngine fresh(1024, 1024, true);
+            fresh.setBackgroundType("pdf");
+            if (!fresh.deserializeDrawing(moving.serializeDrawing())) throw std::runtime_error("Could not reload motion test drawing");
+            fresh.setRenderViewport(2, 0, 0, 512, 512);
+            auto rebuilt = renderCrop(fresh, context, 1024, 1024);
+            for (int y = 0; y < 1024; ++y) for (int x = 0; x < 1024; ++x) {
+                if (settled.getColor(x, y) != rebuilt.getColor(x, y))
+                    throw std::runtime_error("Settled motion frame differs from a fresh render");
+            }
+        }
         for (auto* context : {first.get(), static_cast<GrDirectContext*>(nullptr)}) {
             SkiaDrawingEngine cached(1024, 2048, true);
             cached.setBackgroundType("pdf");

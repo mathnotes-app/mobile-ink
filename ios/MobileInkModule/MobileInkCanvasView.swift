@@ -175,6 +175,28 @@ class MobileInkCanvasView: MTKView {
             if let engine = drawingEngine { setHoldToShapeEnabled(engine, holdToShapeEnabled); requestDisplay() }
         }
     }
+    private var pendingViewportQualityRefresh: DispatchWorkItem?
+    var viewportMotionActive = false {
+        didSet {
+            guard oldValue != viewportMotionActive else { return }
+            pendingViewportQualityRefresh?.cancel()
+            pendingViewportQualityRefresh = nil
+            if viewportMotionActive {
+                if let engine = drawingEngine { setViewportMotionActive(engine, true) }
+            } else {
+                // Rapid consecutive pinches should not rebuild high-resolution
+                // tiles between gestures. Sharpen once the viewport stays idle.
+                let refresh = DispatchWorkItem { [weak self] in
+                    guard let self, !self.isReleased, !self.viewportMotionActive,
+                          let engine = self.drawingEngine else { return }
+                    setViewportMotionActive(engine, false)
+                    self.requestDisplay(forceWhenSuspended: true)
+                }
+                pendingViewportQualityRefresh = refresh
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: refresh)
+            }
+        }
+    }
     private var pendingWidth: Float = 3.0
     private var pendingColor: UInt32 = 0xFF000000  // Black
     private var pendingEraserMode: String = "pixel"
@@ -1743,6 +1765,7 @@ class MobileInkCanvasView: MTKView {
         }
 
         setHoldToShapeEnabled(engine, holdToShapeEnabled)
+        setViewportMotionActive(engine, viewportMotionActive)
         applyPendingBackgroundType(to: engine)
         applyRenderViewportToEngine()
 

@@ -39,6 +39,15 @@ async function setup() {
   return { ref, changed, tree: tree! };
 }
 beforeEach(() => { jest.clearAllMocks(); });
+it('uses cached ink during movement and requests full quality after it settles', async () => {
+  const { tree } = await setup();
+  expect(mockProps.viewportMotionActive).toBe(false);
+  act(() => mockViewportProps.onMotionStateChange(true));
+  expect(mockProps.viewportMotionActive).toBe(true);
+  act(() => mockViewportProps.onMotionStateChange(false));
+  expect(mockProps.viewportMotionActive).toBe(false);
+  tree.unmount();
+});
 it('retains blank pages and captures the whole document in order', async () => {
   const { ref, tree } = await setup();
   expect(mockLoad.mock.calls[0][0]).toHaveLength(2);

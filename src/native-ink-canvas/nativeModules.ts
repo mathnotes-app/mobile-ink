@@ -44,6 +44,7 @@ export const supportsRenderBackendProp =
     "renderBackend",
   );
 export const supportsHoldToShapeProp = !!mobileInkCanvasViewConfig?.NativeProps?.holdToShapeEnabled;
+export const supportsViewportMotionProp = !!mobileInkCanvasViewConfig?.NativeProps?.viewportMotionActive;
 
 const backgroundConfig = Platform.OS === 'ios'
   ? UIManager.getViewManagerConfig('MobileInkBackgroundView') as { NativeProps?: Record<string, unknown> } | null

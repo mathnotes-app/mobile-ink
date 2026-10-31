@@ -76,6 +76,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
   // re-render this tree or the native surface (see resolveDocumentRenderTarget).
   const transformRef = useRef<InfiniteInkViewportTransform | null>(null);
   const isMoving = useRef(false);
+  const [viewportMotionActive, setViewportMotionActive] = useState(false);
   const renderLayout = useCallback(() => ({ pageWidth, pageHeight, pageCount: pagesRef.current.length, contentPadding }),
     [contentPadding, pageHeight, pageWidth]);
   const [renderTarget, setRenderTarget] = useState<DocumentRenderTarget>(
@@ -220,6 +221,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
   useEffect(updateRenderTarget, [pages.length, updateRenderTarget]);
   const onMotionStateChange = useCallback((moving: boolean) => {
     isMoving.current = moving;
+    setViewportMotionActive(moving);
     updateRenderTarget();
     callbacks.current.onMotionStateChange?.(moving);
   }, [updateRenderTarget]);
@@ -250,6 +252,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
             renderViewportWidthRatio={renderTarget.widthRatio} renderViewportHeightRatio={renderTarget.heightRatio}
             drawingPolicy={props.fingerDrawingEnabled ? 'anyinput' : 'pencilonly'} onCanvasReady={onReady}
             holdToShapeEnabled={props.holdToShapeEnabled}
+            viewportMotionActive={viewportMotionActive}
             onDrawingBegin={event => {
               revision.current++;
               drawingPage.current = Math.max(0, Math.min(pagesRef.current.length - 1, Math.floor(event.nativeEvent.y / pageHeight)));

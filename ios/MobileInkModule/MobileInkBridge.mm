@@ -267,6 +267,10 @@ void setHoldToShapeEnabled(void* engine, bool enabled) {
     if (engine) static_cast<SkiaDrawingEngine*>(engine)->setHoldToShapeEnabled(enabled);
 }
 
+void setViewportMotionActive(void* engine, bool active) {
+    if (engine) static_cast<SkiaDrawingEngine*>(engine)->setViewportMotionActive(active);
+}
+
 // Predictive touch support for Apple Pencil low-latency rendering
 void clearPredictedPoints(void* engine) {
     if (engine) {

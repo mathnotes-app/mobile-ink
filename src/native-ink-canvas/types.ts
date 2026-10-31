@@ -33,6 +33,8 @@ export interface NativeInkCanvasProps {
   drawingPolicy?: "default" | "anyinput" | "pencilonly";
   /** Whether holding a stroke converts it to a recognized shape. Defaults to true. */
   holdToShapeEnabled?: boolean;
+  /** Reuse cached ink at an approximate resolution while the viewport moves. */
+  viewportMotionActive?: boolean;
   /** iOS only: Fired when Apple Pencil barrel is double-tapped (2nd gen+) */
   onPencilDoubleTap?: (event: NativeSyntheticEvent<{ sequence: number; timestamp: number }>) => void;
 }

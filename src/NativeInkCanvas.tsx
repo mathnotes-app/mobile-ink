@@ -30,6 +30,7 @@ import {
   supportsRenderBackendProp,
   supportsInkDisplayAppearance,
   supportsHoldToShapeProp,
+  supportsViewportMotionProp,
 } from "./native-ink-canvas/nativeModules";
 import type {
   NativeInkCanvasProps,
@@ -619,6 +620,7 @@ export const NativeInkCanvas = forwardRef<
     renderSuspended: props.renderSuspended,
     drawingPolicy: props.drawingPolicy,
     ...(supportsHoldToShapeProp ? { holdToShapeEnabled: props.holdToShapeEnabled ?? true } : {}),
+    ...(supportsViewportMotionProp ? { viewportMotionActive: props.viewportMotionActive ?? false } : {}),
     continuousDocument: props.continuousDocument ?? false,
     renderScale: props.renderScale ?? 1,
     renderViewportLeftRatio: props.renderViewportLeftRatio ?? 0,

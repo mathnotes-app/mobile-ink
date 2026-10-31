@@ -1,7 +1,10 @@
 #include "SkiaDrawingEngine.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <include/core/SkBBHFactory.h>
+#include <include/core/SkPictureRecorder.h>
 #include <include/gpu/ganesh/SkSurfaceGanesh.h>
 
 namespace nativedrawing {
@@ -41,6 +44,55 @@ void SkiaDrawingEngine::setRenderViewport(
     visibleTop_ = std::max(0.0f, std::min(static_cast<float>(height_), visibleTop));
     visibleWidth_ = std::max(1.0f, std::min(static_cast<float>(width_) - visibleLeft_, visibleWidth));
     visibleHeight_ = std::max(1.0f, std::min(static_cast<float>(height_) - visibleTop_, visibleHeight));
+}
+
+void SkiaDrawingEngine::setViewportMotionActive(bool active) {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+    viewportMotionActive_ = active;
+}
+
+bool SkiaDrawingEngine::drawCachedStrokeTileFallback(
+    SkCanvas* canvas, const StrokeTileKey& key, int tileWidth, int tileHeight
+) {
+    const float targetScale = key.scaleBucket / 100.0f;
+    const float left = key.tileX * kStrokeTileSize / targetScale;
+    const float top = key.tileY * kStrokeTileSize / targetScale;
+    const float right = std::min(static_cast<float>(width_), (key.tileX * kStrokeTileSize + tileWidth) / targetScale);
+    const float bottom = std::min(static_cast<float>(height_), (key.tileY * kStrokeTileSize + tileHeight) / targetScale);
+    std::array<int, 10> scales = {25, 50, 75, 100, 150, 200, 250, 300, 400, 500};
+    std::sort(scales.begin(), scales.end(), [targetScale](int a, int b) {
+        return std::fabs(std::log((a / 100.0f) / targetScale)) < std::fabs(std::log((b / 100.0f) / targetScale));
+    });
+    for (const int bucket : scales) {
+        if (bucket == key.scaleBucket) continue;
+        const float sourceScale = bucket / 100.0f;
+        const int startX = std::max(0, static_cast<int>(std::floor(left * sourceScale / kStrokeTileSize)));
+        const int startY = std::max(0, static_cast<int>(std::floor(top * sourceScale / kStrokeTileSize)));
+        const int endX = std::max(startX, static_cast<int>(std::ceil(right * sourceScale / kStrokeTileSize)) - 1);
+        const int endY = std::max(startY, static_cast<int>(std::ceil(bottom * sourceScale / kStrokeTileSize)) - 1);
+        bool complete = true;
+        for (int y = startY; complete && y <= endY; ++y) {
+            for (int x = startX; x <= endX; ++x) {
+                auto it = strokeTileCache_.find(StrokeTileKey{bucket, x, y, key.epoch});
+                if (it == strokeTileCache_.end() || !it->second.image) { complete = false; break; }
+            }
+        }
+        if (!complete) continue;
+        canvas->save();
+        canvas->clipRect(SkRect::MakeXYWH(key.tileX * kStrokeTileSize, key.tileY * kStrokeTileSize, tileWidth, tileHeight));
+        canvas->scale(targetScale / sourceScale, targetScale / sourceScale);
+        for (int y = startY; y <= endY; ++y) {
+            for (int x = startX; x <= endX; ++x) {
+                auto it = strokeTileCache_.find(StrokeTileKey{bucket, x, y, key.epoch});
+                it->second.lastUsed = ++strokeTileUseCounter_;
+                canvas->drawImage(it->second.image, x * kStrokeTileSize, y * kStrokeTileSize,
+                                  SkSamplingOptions(SkFilterMode::kLinear));
+            }
+        }
+        canvas->restore();
+        return true;
+    }
+    return false;
 }
 
 void SkiaDrawingEngine::renderVisibleViewport(SkCanvas* canvas) {
@@ -108,7 +160,8 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
     int tileWidth,
     int tileHeight,
     float scale,
-    const std::vector<size_t>& candidates
+    const std::vector<size_t>& candidates,
+    std::unordered_map<size_t, sk_sp<SkPicture>>& crayonPictures
 ) {
     SkImageInfo info = SkImageInfo::MakeN32Premul(tileWidth, tileHeight);
     // Coverage AA on a single-sample target can rasterize each pressure path
@@ -174,7 +227,23 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
             }
         }
 
-        renderStrokeGeometry(tileCanvas, stroke, strokePaint);
+        if (stroke.toolType == "crayon" && stroke.points.size() >= 64 && !tileBounds.contains(strokeBounds)) {
+            auto it = crayonPictures.find(i);
+            if (it == crayonPictures.end()) {
+                // Record the pressure-sensitive textured segments once per
+                // frame. The spatial index skips segments outside each tile,
+                // without changing their order or appearance.
+                SkPictureRecorder recorder;
+                SkRTreeFactory hierarchy;
+                auto* recordingCanvas = recorder.beginRecording(
+                    SkRect::MakeWH(static_cast<float>(width_), static_cast<float>(height_)), &hierarchy);
+                renderStrokeGeometry(recordingCanvas, stroke, strokePaint);
+                it = crayonPictures.emplace(i, recorder.finishRecordingAsPicture()).first;
+            }
+            tileCanvas->drawPicture(it->second);
+        } else {
+            renderStrokeGeometry(tileCanvas, stroke, strokePaint);
+        }
 
         if (needsClipRestore) {
             tileCanvas->restore();
@@ -298,6 +367,7 @@ void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
     // Collect once, only if a missing tile needs geometry. Scanning the entire
     // lecture independently for every tile multiplies work as notes grow.
     std::vector<size_t> candidates;
+    std::unordered_map<size_t, sk_sp<SkPicture>> crayonPictures;
     bool candidatesReady = false;
     const float visibleLeft = visibleBounds.left();
     const float visibleTop = visibleBounds.top();
@@ -332,6 +402,9 @@ void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
 
             auto it = strokeTileCache_.find(key);
             if (it == strokeTileCache_.end()) {
+                if (viewportMotionActive_ && drawCachedStrokeTileFallback(canvas, key, tileWidth, tileHeight)) {
+                    continue;
+                }
                 if (!candidatesReady) {
                     for (size_t index = 0; index < strokes_.size(); ++index) {
                         const auto& stroke = strokes_[index];
@@ -343,7 +416,7 @@ void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
                     }
                     candidatesReady = true;
                 }
-                sk_sp<SkImage> image = renderStrokeTile(canvas, key, tileWidth, tileHeight, bucketScale, candidates);
+                sk_sp<SkImage> image = renderStrokeTile(canvas, key, tileWidth, tileHeight, bucketScale, candidates, crayonPictures);
                 if (!image) {
                     continue;
                 }

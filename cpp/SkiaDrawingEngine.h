@@ -13,6 +13,7 @@
 #include <include/core/SkPaint.h>
 #include <include/core/SkColor.h>
 #include <include/core/SkImage.h>
+#include <include/core/SkPicture.h>
 #include <include/core/SkPathMeasure.h>
 #include <include/core/SkPathUtils.h>
 #include <SkPathOps.h>
@@ -104,6 +105,7 @@ public:
         float visibleWidth,
         float visibleHeight
     );
+    void setViewportMotionActive(bool active);
     sk_sp<SkImage> makeSnapshot();
 
     // Batch export: Render multiple pages to PNG without creating new engine each time
@@ -306,6 +308,7 @@ private:
 
     bool hasActiveShapePreview_ = false;
     bool holdToShapeEnabled_ = true;
+    bool viewportMotionActive_ = false;
     std::string activeShapePreviewToolType_;
     std::vector<Point> activeShapePreviewPoints_;
     std::vector<Point> activeShapePreviewBasePoints_;
@@ -325,6 +328,7 @@ private:
     void markStrokeCachesDirty();
     void invalidateStrokeTilesForRect(const SkRect& bounds);
     void renderScaleAwareStrokes(SkCanvas* canvas);
+    bool drawCachedStrokeTileFallback(SkCanvas* canvas, const StrokeTileKey& key, int tileWidth, int tileHeight);
     void renderActiveContent(SkCanvas* canvas);
     // Draw points as a single constant-width stroked centerline (highlighter/
     // marker). Uses cachedPath when non-empty, else smooths from points.
@@ -335,7 +339,7 @@ private:
         const SkPaint& paint
     );
     const void* strokeTileContext_ = nullptr;
-    sk_sp<SkImage> renderStrokeTile(SkCanvas* targetCanvas, const StrokeTileKey& key, int tileWidth, int tileHeight, float scale, const std::vector<size_t>& candidates);
+    sk_sp<SkImage> renderStrokeTile(SkCanvas* targetCanvas, const StrokeTileKey& key, int tileWidth, int tileHeight, float scale, const std::vector<size_t>& candidates, std::unordered_map<size_t, sk_sp<SkPicture>>& crayonPictures);
     void pruneStrokeTileCache();
 
     // Pixel eraser stroke splitting - splits a stroke by removing portions that intersect the eraser
