@@ -203,6 +203,22 @@ bool testDeserializeRejectsImpossiblePointCount() {
   return expect(!serializer.deserialize(data, strokes), "impossible point count should be rejected");
 }
 
+bool testEraserMasksPreserveChangingRadius() {
+  Stroke stroke;
+  stroke.erasedBy = {{20, 20, 4}, {24, 20, 10}};
+  stroke.ensureEraserCacheValid();
+  if (!expect(stroke.cachedEraserPath.contains(24, 28), "larger eraser must keep its full radius")) return false;
+  if (!expect(!stroke.cachedEraserPath.contains(20, 31), "eraser must not extend past its circles")) return false;
+  Stroke reversed;
+  reversed.erasedBy = {{20, 20, 10}, {24, 20, 4}};
+  reversed.ensureEraserCacheValid();
+  if (!expect(!reversed.cachedEraserPath.contains(30, 27), "smaller eraser must not inherit the earlier radius")) return false;
+  Stroke bridge;
+  bridge.erasedBy = {{20, 20, 4}, {32, 20, 10}};
+  bridge.ensureEraserCacheValid();
+  return expect(bridge.cachedEraserPath.contains(23, 25), "changing radius must leave no gaps in a connected gesture");
+}
+
 bool testMixedValidAndInvalidPayloadsNeverCrash() {
   DrawingSerialization serializer;
 
@@ -235,6 +251,7 @@ int main() {
       testDeserializeRejectsTruncatedPayload() &&
       testDeserializeRejectsUnsupportedVersion() &&
       testDeserializeRejectsImpossiblePointCount() &&
+      testEraserMasksPreserveChangingRadius() &&
       testMixedValidAndInvalidPayloadsNeverCrash() &&
       testHoldToShapeRecognitionRespectsToolIntent();
 

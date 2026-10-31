@@ -112,6 +112,34 @@ int main() {
                 expectInk(committed, x, 212, true, "Committed fast erase removed ink outside its edge");
             }
         }
+        // A new eraser mark can extend the persisted mask back into a cached
+        // neighboring tile. Both tiles must match a freshly loaded document.
+        for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
+            SkiaDrawingEngine document(1024, 1024, true);
+            document.setBackgroundType("pdf");
+            document.setRenderViewport(1, 0, 0, 1024, 1024);
+            document.setToolWithParams("pen", 6, 0xff000000, "pixel");
+            document.touchBegan(350, 597, 1);
+            for (int x = 355; x <= 750; x += 5) document.touchMoved(x, 597, 1);
+            document.touchEnded();
+            document.setToolWithParams("eraser", 200, 0xff000000, "pixel");
+            document.touchBegan(450, 500, 1);
+            document.touchEnded();
+            expectInk(renderCrop(document, context, 1024, 1024), 500, 597, true,
+                      "First erase unexpectedly reached the neighboring ink");
+            document.touchBegan(650, 500, 1);
+            document.touchEnded();
+            auto cached = renderCrop(document, context, 1024, 1024);
+            auto strokes = document.snapshotDrawing();
+            SkiaDrawingEngine reloaded(1024, 1024, true);
+            reloaded.setBackgroundType("pdf");
+            reloaded.setRenderViewport(1, 0, 0, 1024, 1024);
+            reloaded.replaceDrawing(strokes);
+            auto fresh = renderCrop(reloaded, context, 1024, 1024);
+            expectInk(fresh, 500, 597, false, "Joined eraser did not extend to the neighboring tile");
+            if (cached.getColor(500, 597) != fresh.getColor(500, 597))
+                throw std::runtime_error("Joined eraser left a stale neighboring tile");
+        }
         // Erasing textured ink must reveal the image underneath without
         // clearing that image or changing the ink's place in the stack.
         for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {

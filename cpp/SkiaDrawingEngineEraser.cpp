@@ -206,6 +206,7 @@ bool SkiaDrawingEngine::applyPendingPixelEraseToStrokes() {
 
     // The live path covers the entire gesture, including its round ends.
     const SkRect eraseBounds = pendingPixelEraserPath_.getBounds();
+    SkRect invalidateBounds = eraseBounds;
 
     std::vector<SkRect> circleBounds;
     circleBounds.reserve(pendingPixelEraserCircles_.size());
@@ -245,6 +246,20 @@ bool SkiaDrawingEngine::applyPendingPixelEraseToStrokes() {
             continue;
         }
 
+        // The persisted mask joins adjacent circles. A new gesture may join
+        // the previous one, changing pixels around that previous endpoint too.
+        if (!stroke.erasedBy.empty()) {
+            const auto& previous = stroke.erasedBy.back();
+            const auto& next = circlesForStroke.front();
+            const float dx = next.x - previous.x;
+            const float dy = next.y - previous.y;
+            const float distanceLimit = previous.radius + next.radius;
+            if (dx * dx + dy * dy <= distanceLimit * distanceLimit) {
+                invalidateBounds.join(SkRect::MakeLTRB(previous.x - previous.radius, previous.y - previous.radius,
+                                                       previous.x + previous.radius, previous.y + previous.radius));
+            }
+        }
+
         stroke.erasedBy.insert(
             stroke.erasedBy.end(),
             circlesForStroke.begin(),
@@ -268,7 +283,6 @@ bool SkiaDrawingEngine::applyPendingPixelEraseToStrokes() {
     }
 
     if (anyModified) {
-        SkRect invalidateBounds = eraseBounds;
         invalidateBounds.outset(8.0f, 8.0f);
         invalidateStrokeTilesForRect(invalidateBounds);
     }
