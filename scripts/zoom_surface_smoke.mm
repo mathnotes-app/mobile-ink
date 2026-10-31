@@ -6,6 +6,7 @@
 #include "include/core/SkBBHFactory.h"
 #include "include/core/SkBitmap.h"
 #include "include/core/SkPictureRecorder.h"
+#include "include/codec/SkCodec.h"
 #include "include/gpu/ganesh/GrDirectContext.h"
 #include "include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "include/gpu/ganesh/mtl/GrMtlBackendContext.h"
@@ -78,6 +79,25 @@ int main() {
     try {
         auto first = makeContext();
         auto second = makeContext();
+        // Compositing ink over inserted images depends on a truly transparent
+        // native PNG, including after encoding and decoding the export.
+        {
+            SkiaDrawingEngine source(512, 512);
+            drawLine(source);
+            auto pages = source.batchExportPages({source.serializeDrawing()}, {"pdf"}, {}, {0}, 1);
+            if (pages.size() != 1) throw std::runtime_error("Transparent export missing");
+            NSString* encoded = [NSString stringWithUTF8String:pages[0].c_str() + 22];
+            NSData* data = [[NSData alloc] initWithBase64EncodedString:encoded options:0];
+            auto codec = SkCodec::MakeFromData(SkData::MakeWithCopy(data.bytes, data.length));
+            if (!codec) throw std::runtime_error("Transparent export PNG invalid");
+            SkBitmap pixels;
+            pixels.allocPixels(SkImageInfo::MakeN32Premul(512, 512));
+            if (codec->getPixels(pixels.info(), pixels.getPixels(), pixels.rowBytes()) != SkCodec::kSuccess)
+                throw std::runtime_error("Transparent export PNG decode failed");
+            if (SkColorGetA(pixels.getColor(10, 10)) != 0)
+                throw std::runtime_error("Ink export background is not transparent");
+            expectInk(pixels, 100, 100, true, "Ink export did not retain the stroke");
+        }
         // First use must allocate the live-stroke cache; a following stroke
         // must clear its old snapshot without removing committed ink.
         SkiaDrawingEngine live(512, 512);
