@@ -1969,10 +1969,9 @@ extension MobileInkCanvasView: MTKViewDelegate {
 
         // MTKView.currentDrawable can wait a full second when the presentation
         // pool is exhausted. Never perform that wait on the Pencil/input thread.
-        let revision = renderGeometryRevision
         frameAcquisition.acquire({ metalLayer.nextDrawable() }) { [weak self] drawable in
             guard let self, !self.isReleased else { return }
-            guard let drawable, self.window != nil, revision == self.renderGeometryRevision,
+            guard let drawable, self.window != nil,
                   drawable.texture.width == Int(self.drawableSize.width),
                   drawable.texture.height == Int(self.drawableSize.height) else {
                 self.frameAcquisition.finish()
@@ -1980,6 +1979,10 @@ extension MobileInkCanvasView: MTKViewDelegate {
                 return
             }
             let requestedAt = self.pendingFrameRequestedAt ?? CACurrentMediaTime()
+            // The engine and target frame are read on the main thread below.
+            // A drawable acquired for an older revision is still usable when
+            // its size matches the latest geometry.
+            let revision = self.renderGeometryRevision
             let geometrySwap = self.continuousDocument && self.frame != self.targetRenderFrame
             let targetFrame = self.targetRenderFrame
             self.hasPendingFrame = false
@@ -2018,7 +2021,6 @@ extension MobileInkCanvasView: MTKViewDelegate {
                 guard let self, !self.isReleased else { return }
                 defer { self.frameAcquisition.finish() }
                 guard completed.status == .completed, self.window != nil,
-                      revision == self.renderGeometryRevision,
                       let metalLayer = self.layer as? CAMetalLayer else {
                     self.hasPendingFrame = true
                     self.retryPendingFrame()
@@ -2031,6 +2033,10 @@ extension MobileInkCanvasView: MTKViewDelegate {
                 drawable.present()
                 CATransaction.commit()
                 metalLayer.presentsWithTransaction = false
+                // Present the matching image and crop even when a newer crop
+                // arrived during rendering. Dropping every such frame can
+                // leave only a small old crop visible throughout a fast pinch.
+                if revision != self.renderGeometryRevision { self.hasPendingFrame = true }
                 let callbacks = self.pendingPresentedLoadCallbacks
                 self.pendingPresentedLoadCallbacks.removeAll()
                 if !callbacks.isEmpty { self.interactionAudit?.didPresentInitialLoad() }
