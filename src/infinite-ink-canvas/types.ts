@@ -63,6 +63,8 @@ export type InfiniteInkCanvasProps = {
    * while the canvas pans or zooms.
    */
   overlay?: ReactNode;
+  /** A short finger tap in untransformed viewport-content coordinates. */
+  onContentTap?: (event: { nativeEvent: { locationX: number; locationY: number; isZoomableContentTap: true } }) => void;
   onReady?: () => void;
   /** A page could not be safely saved/reassigned. Dirty ink remains in its slot. */
   onError?: (error: Error) => void;

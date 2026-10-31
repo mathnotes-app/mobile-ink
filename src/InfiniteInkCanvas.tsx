@@ -109,6 +109,7 @@ function InfiniteInkCanvasImpl(
     contentPadding = DEFAULT_CONTENT_PADDING,
     showPageLabels = true,
     overlay,
+    onContentTap,
     onReady,
     onError,
     onDrawingChange,
@@ -636,6 +637,7 @@ function InfiniteInkCanvasImpl(
         contentPadding={contentPadding}
         isLandscape={true}
         fingerDrawingEnabled={fingerDrawingEnabled}
+        onContentTap={fingerDrawingEnabled ? undefined : onContentTap}
         enableMomentumScroll={true}
         lockHorizontalPanNearFit={true}
         blockedTouchRects={selectionTouchRects}

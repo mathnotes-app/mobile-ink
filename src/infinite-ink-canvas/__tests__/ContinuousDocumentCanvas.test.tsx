@@ -39,6 +39,18 @@ async function setup() {
   return { ref, changed, tree: tree! };
 }
 beforeEach(() => { jest.clearAllMocks(); });
+it('forwards finger taps only when finger drawing is disabled', async () => {
+  const onContentTap = jest.fn();
+  const tool = { toolType: 'pen' as const, width: 2, color: '#000000', eraserMode: 'pixel' as const };
+  const tree = render(<ContinuousDocumentCanvas initialData={data} toolState={tool}
+    fingerDrawingEnabled={false} onContentTap={onContentTap} />);
+  await act(async () => {});
+  expect(mockViewportProps.onContentTap).toBe(onContentTap);
+  tree.rerender(<ContinuousDocumentCanvas initialData={data} toolState={tool}
+    fingerDrawingEnabled onContentTap={onContentTap} />);
+  expect(mockViewportProps.onContentTap).toBeUndefined();
+  tree.unmount();
+});
 it('uses cached ink during movement and requests full quality after it settles', async () => {
   const { tree } = await setup();
   expect(mockProps.viewportMotionActive).toBe(false);

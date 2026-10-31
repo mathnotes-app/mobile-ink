@@ -245,6 +245,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
     <ZoomableInkViewport ref={viewport} style={styles.viewport} minScale={props.minScale ?? 1} maxScale={props.maxScale ?? 5}
       contentWidth={pageWidth} contentHeight={documentHeight} contentPadding={contentPadding} isLandscape
       fingerDrawingEnabled={props.fingerDrawingEnabled} enableMomentumScroll lockHorizontalPanNearFit
+      onContentTap={props.fingerDrawingEnabled ? undefined : props.onContentTap}
       blockedTouchRects={blockedTouchRects} singleFingerPanBlocked={selectionRects.length > 0}
       transformNotificationMinIntervalMs={props.transformNotificationMinIntervalMs ?? 16}
       onTransformChange={onTransform} onMotionStateChange={onMotionStateChange}>
