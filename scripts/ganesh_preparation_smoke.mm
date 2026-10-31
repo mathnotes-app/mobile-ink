@@ -90,6 +90,59 @@ int main() {
                     }
                 }
             }
+            drawing.clear();
+            auto image = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(32, 32));
+            image->getCanvas()->clear(SK_ColorRED);
+            nativedrawing::ImageLayer layer;
+            layer.id = "red-photo"; layer.image = image->makeImageSnapshot();
+            layer.bounds = SkRect::MakeXYWH(30, 30, 160, 160); layer.layerOrder = 1;
+            drawing.setImageLayers({layer});
+            drawing.setToolWithParams("pen", 16, 0xFF000000u, "pixel");
+            drawing.touchBegan(40, 80, 1);
+            for (int x = 48; x <= 160; x += 8) drawing.touchMoved(x, 80, 1);
+            drawing.touchEnded();
+            for (bool dark : {false, true}) {
+                if (!renderToGaneshMetalTextureForDisplay(&drawing, context, (__bridge void*)texture, 256, 256, true, dark)) return 1;
+                id<MTLCommandBuffer> barrier = [queue commandBuffer]; [barrier commit]; [barrier waitUntilCompleted];
+                std::vector<uint8_t> gpu(256 * 256 * 4);
+                [texture getBytes:gpu.data() bytesPerRow:256 * 4 fromRegion:MTLRegionMake2D(0, 0, 256, 256) mipmapLevel:0];
+                const int photo = (50 * 256 + 100) * 4, ink = (80 * 256 + 100) * 4;
+                if (gpu[photo] > 5 || gpu[photo + 1] > 5 || gpu[photo + 2] < 250 || gpu[photo + 3] < 250 ||
+                    (dark ? gpu[ink + 2] < 220 : gpu[ink + 2] > 20)) {
+                    matches = false;
+                    std::cerr << "Photo or ink changed color incorrectly in " << (dark ? "dark" : "light") << " mode\n";
+                }
+            }
+            // An invisible image should not change the presentation of ink.
+            // This compares the per-ink transform used for mixed image notes
+            // against the original whole-surface display transform.
+            layer.hidden = true;
+            for (uint32_t color : {0xFFFF0000u, 0xFF00FF00u, 0xFF0000FFu, 0xFF000000u, 0x80336699u}) {
+                drawing.clear(); drawing.setImageLayers({});
+                drawing.setToolWithParams("pen", 16, color, "pixel");
+                drawing.touchBegan(24, 80, 1);
+                for (int x = 32; x <= 232; x += 8) drawing.touchMoved(x, 80, 1);
+                drawing.touchEnded();
+                for (bool dark : {false, true}) {
+                    std::vector<uint8_t> baseline(256 * 256 * 4), mixed(baseline.size());
+                    drawing.setImageLayers({});
+                    if (!renderToGaneshMetalTextureForDisplay(&drawing, context, (__bridge void*)texture, 256, 256, true, dark)) return 1;
+                    id<MTLCommandBuffer> firstBarrier = [queue commandBuffer]; [firstBarrier commit]; [firstBarrier waitUntilCompleted];
+                    [texture getBytes:baseline.data() bytesPerRow:256 * 4 fromRegion:MTLRegionMake2D(0, 0, 256, 256) mipmapLevel:0];
+                    drawing.setImageLayers({layer});
+                    if (!renderToGaneshMetalTextureForDisplay(&drawing, context, (__bridge void*)texture, 256, 256, true, dark)) return 1;
+                    id<MTLCommandBuffer> secondBarrier = [queue commandBuffer]; [secondBarrier commit]; [secondBarrier waitUntilCompleted];
+                    [texture getBytes:mixed.data() bytesPerRow:256 * 4 fromRegion:MTLRegionMake2D(0, 0, 256, 256) mipmapLevel:0];
+                    const int pixel = (80 * 256 + 100) * 4;
+                    for (int channel = 0; channel < 4; ++channel) {
+                        if (std::abs(int(baseline[pixel + channel]) - int(mixed[pixel + channel])) > 2) {
+                            matches = false;
+                            std::cerr << "Image layer changed ink display color, channel " << channel
+                                << ": " << int(baseline[pixel + channel]) << " vs " << int(mixed[pixel + channel]) << '\n';
+                        }
+                    }
+                }
+            }
         }
         destroyGaneshMetalContext(context);
         if (!matches) return 1;

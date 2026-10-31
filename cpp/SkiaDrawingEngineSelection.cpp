@@ -174,7 +174,9 @@ void SkiaDrawingEngine::pasteSelection(float offsetX, float offsetY) {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
 
     auto commit = [this](StrokeDelta&& d) { commitDelta(std::move(d)); };
-    selection_->pasteSelection(strokes_, copiedStrokes_, offsetX, offsetY, commit);
+    auto copies = copiedStrokes_;
+    for (auto& stroke : copies) stroke.layerOrder = reserveLayerOrder();
+    selection_->pasteSelection(strokes_, copies, offsetX, offsetY, commit);
     markStrokeCachesDirty();
 }
 

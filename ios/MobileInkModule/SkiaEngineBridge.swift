@@ -38,6 +38,25 @@ func setViewportMotionActive(_ engine: OpaquePointer, _ active: Bool)
 @_silgen_name("warmCrayonTextures")
 func warmCrayonTextures()
 
+@_silgen_name("prepareDocumentImageLayers")
+func prepareDocumentImageLayers(_ json: UnsafePointer<CChar>, _ scale: Double) -> UnsafeMutableRawPointer?
+@_silgen_name("clearDocumentImageCache")
+func clearDocumentImageCache()
+@_silgen_name("installDocumentImageLayers")
+func installDocumentImageLayers(_ engine: OpaquePointer, _ prepared: UnsafeMutableRawPointer)
+@_silgen_name("installAnimatedDocumentImageLayers")
+func installAnimatedDocumentImageLayers(_ engine: OpaquePointer, _ prepared: UnsafeMutableRawPointer)
+@_silgen_name("documentImageLayersAreAnimated")
+func documentImageLayersAreAnimated(_ prepared: UnsafeMutableRawPointer) -> Bool
+@_silgen_name("snapshotDocumentImageLayers")
+func snapshotDocumentImageLayers(_ engine: OpaquePointer) -> UnsafeMutableRawPointer?
+@_silgen_name("advanceDocumentImageLayers")
+func advanceDocumentImageLayers(_ prepared: UnsafeMutableRawPointer, _ time: Double) -> Int32
+@_silgen_name("releaseDocumentImageLayers")
+func releaseDocumentImageLayers(_ prepared: UnsafeMutableRawPointer)
+@_silgen_name("reserveDocumentLayerOrder")
+func reserveDocumentLayerOrder(_ engine: OpaquePointer) -> UInt64
+
 // MARK: - Predictive Touch (Apple Pencil low-latency rendering)
 @_silgen_name("clearPredictedPoints")
 func clearPredictedPoints(_ engine: OpaquePointer)

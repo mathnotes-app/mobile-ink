@@ -29,6 +29,6 @@ Pod::Spec.new do |s|
     "DEFINES_MODULE" => "YES"
   }
 
-  s.frameworks = "MetalKit", "Metal", "PDFKit", "CoreGraphics", "UIKit"
+  s.frameworks = "MetalKit", "Metal", "PDFKit", "CoreGraphics", "ImageIO", "UIKit"
   s.libraries = "c++"
 end

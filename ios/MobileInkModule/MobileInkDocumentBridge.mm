@@ -44,6 +44,20 @@ ContinuousDocumentPage decodePage(NSString* payload) {
         }
         if (page.order.size() != page.strokes.size()) throw std::invalid_argument("Document stroke order count mismatch");
     }
+    id layerOrder = root[@"documentLayerOrder"];
+    if (layerOrder) {
+        if (![layerOrder isKindOfClass:NSArray.class] || [(NSArray*)layerOrder count] != page.strokes.size())
+            throw std::invalid_argument("Document layer order count mismatch");
+        for (size_t i = 0; i < page.strokes.size(); ++i) {
+            id value = layerOrder[i];
+            if (![value isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID())
+                throw std::invalid_argument("Invalid document layer order value");
+            double number = [value doubleValue];
+            if (!std::isfinite(number) || number < 0 || number >= 9007199254740991.0 || std::floor(number) != number)
+                throw std::invalid_argument("Invalid document layer order range");
+            page.strokes[i].layerOrder = static_cast<uint64_t>(number);
+        }
+    }
     return page;
 }
 NSString* encodePage(const ContinuousDocumentPage& page, bool includeOrder) {
@@ -60,8 +74,13 @@ NSString* encodePage(const ContinuousDocumentPage& page, bool includeOrder) {
         for (uint64_t value : page.order) [order addObject:@(value)];
         root[@"documentStrokeOrder"] = order;
     }
+    if (!page.strokes.empty()) {
+        NSMutableArray* layers = [NSMutableArray arrayWithCapacity:page.strokes.size()];
+        for (const auto& stroke : page.strokes) [layers addObject:@(stroke.layerOrder)];
+        root[@"documentLayerOrder"] = layers;
+    }
     NSError* error = nil;
-    NSData* json = [NSJSONSerialization dataWithJSONObject:root options:0 error:&error];
+    NSData* json = [NSJSONSerialization dataWithJSONObject:root options:NSJSONWritingSortedKeys error:&error];
     if (error || !json) throw std::runtime_error("Cannot encode document page");
     return [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
 }
@@ -194,6 +213,35 @@ RCT_EXPORT_METHOD(partitionDocument:(NSString*)payload
         reject(@"DOCUMENT_PARTITION_FAILED", [NSString stringWithUTF8String:error.what()], nil);
     } catch (...) {
         reject(@"DOCUMENT_PARTITION_FAILED", @"Unable to process drawing data", nil);
+    }
+}
+RCT_EXPORT_METHOD(splitProjectedPageByLayers:(NSString*)payload
+                  boundaries:(NSArray<NSNumber*>*)boundaries
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+    try {
+        const auto page = decodePage(payload);
+        std::vector<uint64_t> orders;
+        for (id value in boundaries) {
+            if (![value isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID())
+                throw std::invalid_argument("Invalid layer boundary");
+            const double number = [value doubleValue];
+            if (!std::isfinite(number) || number < 0 || number >= 9007199254740991.0 || std::floor(number) != number)
+                throw std::invalid_argument("Invalid layer boundary");
+            orders.push_back(static_cast<uint64_t>(number));
+        }
+        const auto groups = nativedrawing::splitStrokesByLayer(page.strokes, orders);
+        NSMutableArray* result = [NSMutableArray arrayWithCapacity:groups.size()];
+        for (const auto& strokes : groups) {
+            nativedrawing::ContinuousDocumentPage group;
+            group.strokes = strokes;
+            [result addObject:encodePage(group, false)];
+        }
+        resolve(result);
+    } catch (const std::exception& error) {
+        reject(@"DOCUMENT_LAYER_SPLIT_FAILED", [NSString stringWithUTF8String:error.what()], nil);
+    } catch (...) {
+        reject(@"DOCUMENT_LAYER_SPLIT_FAILED", @"Unable to split document layers", nil);
     }
 }
 RCT_EXPORT_METHOD(projectDocumentPages:(NSArray<NSString*>*)payloads

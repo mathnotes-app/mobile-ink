@@ -35,6 +35,15 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
   @objc var viewportMotionActive: Bool = false {
     didSet { drawingView?.viewportMotionActive = viewportMotionActive }
   }
+  @objc var documentImageLayersJSON: String? {
+    didSet { drawingView?.documentImageLayersJSON = documentImageLayersJSON }
+  }
+  @objc var onImageLayersError: RCTDirectEventBlock? {
+    didSet { drawingView?.onImageLayersError = onImageLayersError }
+  }
+  @objc var onImageLayersReady: RCTDirectEventBlock? {
+    didSet { drawingView?.onImageLayersReady = onImageLayersReady }
+  }
   @objc var onDrawingChange: RCTDirectEventBlock? {
     didSet {
       drawingView?.onDrawingChange = onDrawingChange
@@ -146,6 +155,9 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
     self.drawingView = view
     view.holdToShapeEnabled = holdToShapeEnabled
     view.viewportMotionActive = viewportMotionActive
+    view.onImageLayersError = onImageLayersError
+    view.onImageLayersReady = onImageLayersReady
+    view.documentImageLayersJSON = documentImageLayersJSON
     view.darkDisplay = displayAppearance == "dark"
     // Forward any properties that were set before the drawing view was added
     if let handler = onDrawingChange {
@@ -272,6 +284,16 @@ class MobileInkCanvasViewManager: RCTViewManager {
       guard let container = self.bridge.uiManager.view(forReactTag: node),
             let view = self.findDrawingView(container) else { callback([false]); return }
       callback([view.recordExternalEdit(before, after: after)])
+    }
+  }
+
+  @objc func reserveLayerOrder(_ node: NSNumber, callback: @escaping RCTResponseSenderBlock) {
+    DispatchQueue.main.async {
+      guard let container = self.bridge.uiManager.view(forReactTag: node),
+            let view = self.findDrawingView(container), let engine = view.drawingEngine else {
+        callback([NSNull()]); return
+      }
+      callback([NSNumber(value: reserveDocumentLayerOrder(engine))])
     }
   }
 

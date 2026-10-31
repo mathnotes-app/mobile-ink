@@ -6,6 +6,11 @@ interface DocumentBridge {
   composeDocument(payloads: string[], pageHeight: number): Promise<string>;
   partitionDocument(payload: string, pageCount: number, pageHeight: number): Promise<string[]>;
   captureDocument(viewTag: number, pageCount: number, pageHeight: number): Promise<string[]>;
+  splitProjectedPageByLayers(payload: string, boundaries: number[]): Promise<string[]>;
+}
+
+export function splitProjectedPageByLayers(payload: string, boundaries: number[]): Promise<string[]> {
+  return bridge().splitProjectedPageByLayers(payload, boundaries);
 }
 function bridge(): DocumentBridge {
   const native = NativeModules.MobileInkDocumentBridge as DocumentBridge | undefined;

@@ -551,6 +551,7 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
     snapRecognizedShapeCandidateToStrokes(shapeCandidate, strokes_, averageCalculatedWidth(currentPoints_));
 
     Stroke stroke;
+    stroke.layerOrder = reserveLayerOrder();
     stroke.points = shapeCandidate.recognized ? shapeCandidate.points : currentPoints_;
     stroke.paint = currentPaint_;
     stroke.isEraser = (currentTool_ == "eraser" && eraserMode_ == "pixel");
@@ -628,7 +629,7 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
         } else {
             // Render any remaining tail points to complete the stroke
             if (currentPoints_.size() > activeStrokeRenderer_->getLastRenderedIndex()) {
-                activeStrokeRenderer_->renderFinalTail(currentPoints_, currentPaint_, currentTool_);
+                activeStrokeRenderer_->renderFinalTail(currentPoints_, displayInkPaint(currentPaint_), currentTool_);
             }
 
             // Composite active stroke onto persistent stroke surface
@@ -695,6 +696,8 @@ void SkiaDrawingEngine::clear() {
     delta.clearedEraserCircles = eraserCircles_;
 
     strokes_.clear();
+    crayonPictureCache_.clear();
+    crayonPictureCacheBytes_ = 0;
     eraserCircles_.clear();
     resetIndexedSelectionState();
     currentPoints_.clear();
@@ -891,6 +894,9 @@ void SkiaDrawingEngine::replaceDrawing(std::vector<Stroke>& preparedStrokes) {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
     cancelSelectionTransform();
     strokes_.swap(preparedStrokes);
+    crayonPictureCache_.clear();
+    crayonPictureCacheBytes_ = 0;
+    for (const auto& stroke : strokes_) includeLayerOrder(stroke.layerOrder);
     eraserCircles_.clear();  // Clear eraser circles when loading
     bakedCircleCount_ = 0;  // No circles to bake
     resetIndexedSelectionState();

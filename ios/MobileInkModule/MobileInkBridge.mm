@@ -87,6 +87,12 @@ bool deserializeDrawingBytes(
 }
 
 void renderWithCpuColorOrdering(nativedrawing::SkiaDrawingEngine* engine, SkCanvas* canvas, bool cropped, bool dark) {
+    if (engine->hasImageLayers()) {
+        engine->setInkDisplayTransform(dark, true);
+        if (cropped) engine->renderVisibleViewport(canvas); else engine->render(canvas);
+        return;
+    }
+    engine->setInkDisplayTransform(false, false);
     SkPaint outputPaint;
     outputPaint.setColorFilter(nativedrawing::makeDisplayColorFilter(dark, true));
     canvas->saveLayer(nullptr, &outputPaint);
@@ -219,6 +225,9 @@ using namespace nativedrawing;
 
 // C wrapper functions for Swift
 extern "C" {
+uint64_t reserveDocumentLayerOrder(void* engine) {
+    return engine ? static_cast<SkiaDrawingEngine*>(engine)->reserveLayerOrder() : 0;
+}
 
 void* createDrawingEngine(int width, int height) {
     return new SkiaDrawingEngine(width, height);
@@ -387,18 +396,30 @@ bool isEmpty(void* engine) {
 
 void renderToCanvas(void* engine, void* canvas) {
     if (engine && canvas) {
-        static_cast<SkiaDrawingEngine*>(engine)->render(static_cast<SkCanvas*>(canvas));
+        auto* drawing = static_cast<SkiaDrawingEngine*>(engine);
+        drawing->setInkDisplayTransform(false, false);
+        drawing->render(static_cast<SkCanvas*>(canvas));
     }
 }
 
 void renderVisibleViewportToCanvas(void* engine, void* canvas) {
-    if (engine && canvas) static_cast<SkiaDrawingEngine*>(engine)->renderVisibleViewport(static_cast<SkCanvas*>(canvas));
+    if (engine && canvas) {
+        auto* drawing = static_cast<SkiaDrawingEngine*>(engine);
+        drawing->setInkDisplayTransform(false, false);
+        drawing->renderVisibleViewport(static_cast<SkCanvas*>(canvas));
+    }
 }
 
 void renderToDisplayCanvas(void* engine, void* canvas, bool cropped, bool dark) {
     if (!engine || !canvas) return;
     auto* target = static_cast<SkCanvas*>(canvas);
     auto* drawing = static_cast<SkiaDrawingEngine*>(engine);
+    if (drawing->hasImageLayers()) {
+        drawing->setInkDisplayTransform(dark, false);
+        if (cropped) drawing->renderVisibleViewport(target); else drawing->render(target);
+        return;
+    }
+    drawing->setInkDisplayTransform(false, false);
     SkPaint paint;
     paint.setColorFilter(nativedrawing::makeDisplayColorFilter(dark, false));
     if (dark) target->saveLayer(nullptr, &paint);
@@ -408,7 +429,11 @@ void renderToDisplayCanvas(void* engine, void* canvas, bool cropped, bool dark) 
 }
 
 void renderToCanvasForExport(void* engine, void* canvas) {
-    if (engine && canvas) static_cast<SkiaDrawingEngine*>(engine)->renderForExport(static_cast<SkCanvas*>(canvas));
+    if (engine && canvas) {
+        auto* drawing = static_cast<SkiaDrawingEngine*>(engine);
+        drawing->setInkDisplayTransform(false, false);
+        drawing->renderForExport(static_cast<SkCanvas*>(canvas));
+    }
 }
 
 void setRenderViewport(

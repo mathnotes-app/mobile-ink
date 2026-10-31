@@ -14,6 +14,9 @@ export interface NativeInkCanvasProps {
   onSelectionChange?: (event: { nativeEvent: { count: number; bounds?: NativeSelectionBounds | null } }) => void;
   onCanvasReady?: () => void;
   backgroundType?: string;
+  documentImageLayersJSON?: string;
+  onImageLayersError?: (event: NativeSyntheticEvent<{ message: string }>) => void;
+  onImageLayersReady?: (event: NativeSyntheticEvent<{ json: string }>) => void;
   /** Presentation only; persistence and exports retain authored colors. */
   displayAppearance?: import('../displayAppearance').InkDisplayAppearance;
   pdfBackgroundUri?: string;
@@ -46,6 +49,7 @@ export interface NativeInkCanvasRef {
   clearDocumentPage: (pageIndex: number, pageHeight: number) => void;
   /** Records an opaque overlay patch in the same bounded history as ink. */
   recordExternalEdit: (before: string, after: string) => Promise<boolean>;
+  reserveLayerOrder: () => Promise<number>;
   undo: () => void;
   redo: () => void;
   setTool: (toolType: string, width: number, color: string, eraserMode?: string) => void;

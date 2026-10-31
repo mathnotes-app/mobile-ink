@@ -8,6 +8,7 @@
 
 // Use angle brackets to force system search paths (not CocoaPods symlinks)
 #include <include/core/SkCanvas.h>
+#include <include/core/SkColorFilter.h>
 #include <include/core/SkSurface.h>
 #include <include/core/SkPath.h>
 #include <include/core/SkPaint.h>
@@ -57,6 +58,12 @@ public:
     // Canvas operations
     void clear();
     bool clearDocumentPage(int pageIndex, float pageHeight);
+    uint64_t reserveLayerOrder();
+    void includeLayerOrder(uint64_t order);
+    void setImageLayers(std::vector<ImageLayer> images);
+    std::vector<ImageLayer> snapshotImageLayers();
+    bool hasImageLayers() const;
+    void setInkDisplayTransform(bool dark, bool swapRedBlue);
     // Returns an opaque overlay patch for external edits, or empty for ink/no-op.
     std::string undo();
     std::string redo();
@@ -190,6 +197,14 @@ private:
 
     // Completed strokes
     std::vector<Stroke> strokes_;
+    uint64_t layerSequence_ = 4;
+    std::vector<ImageLayer> imageLayers_;
+    void renderImageLayer(SkCanvas* canvas, const ImageLayer& image);
+    SkPaint displayInkPaint(const SkPaint& paint);
+    bool displayInkDark_ = false;
+    bool displayInkSwap_ = false;
+    sk_sp<SkColorFilter> displayInkFilter_;
+    std::unordered_map<SkColor, SkColor> displayInkColors_;
 
     // Pixel eraser circles - applied during rendering to punch holes
     std::vector<EraserCircle> eraserCircles_;
@@ -261,6 +276,21 @@ private:
     uint64_t strokeTileEpoch_ = 1;
     uint64_t strokeTileUseCounter_ = 0;
     size_t strokeTileCacheBytes_ = 0;
+    struct CrayonPictureKey {
+        uint32_t pathID, color, widthBits;
+        bool operator==(const CrayonPictureKey& other) const {
+            return pathID == other.pathID && color == other.color && widthBits == other.widthBits;
+        }
+    };
+    struct CrayonPictureKeyHasher {
+        size_t operator()(const CrayonPictureKey& key) const {
+            return (static_cast<uint64_t>(key.pathID) * 1315423911u ^ key.color) * 1315423911u ^ key.widthBits;
+        }
+    };
+    struct CrayonPictureEntry { sk_sp<SkPicture> picture; size_t bytes; uint64_t used; };
+    std::unordered_map<CrayonPictureKey, CrayonPictureEntry, CrayonPictureKeyHasher> crayonPictureCache_;
+    size_t crayonPictureCacheBytes_ = 0;
+    uint64_t crayonPictureUseCounter_ = 0;
     float renderScale_ = 1.0f;
     float visibleLeft_ = 0.0f;
     float visibleTop_ = 0.0f;
@@ -340,6 +370,7 @@ private:
     );
     const void* strokeTileContext_ = nullptr;
     sk_sp<SkImage> renderStrokeTile(SkCanvas* targetCanvas, const StrokeTileKey& key, int tileWidth, int tileHeight, float scale, const std::vector<size_t>& candidates, std::unordered_map<size_t, sk_sp<SkPicture>>& crayonPictures);
+    sk_sp<SkPicture> crayonPicture(const Stroke& stroke, const SkPaint& paint);
     void pruneStrokeTileCache();
 
     // Pixel eraser stroke splitting - splits a stroke by removing portions that intersect the eraser

@@ -118,6 +118,18 @@ export const NativeInkCanvas = forwardRef<
       return MobileInkModule.recordExternalEdit(node, before, after);
     },
 
+    reserveLayerOrder: async (): Promise<number> => {
+      const node = findNodeHandle(nativeRef.current);
+      if (!node || Platform.OS !== 'ios' || !MobileInkCanvasViewManager?.reserveLayerOrder)
+        throw new Error('Image layering is unavailable');
+      return new Promise((resolve, reject) => {
+        MobileInkCanvasViewManager.reserveLayerOrder(node, (order: number | null) => {
+          if (!Number.isSafeInteger(order) || !order || order < 1) reject(new Error('Unable to reserve an image layer'));
+          else resolve(order);
+        });
+      });
+    },
+
     undo: () => {
       const node = findNodeHandle(nativeRef.current);
       if (node) {
@@ -615,6 +627,9 @@ export const NativeInkCanvas = forwardRef<
     onDrawingBegin: props.onDrawingBegin,
     onInkSelectionChange: props.onSelectionChange,
     backgroundType: props.backgroundType,
+    ...(Platform.OS === 'ios' && props.documentImageLayersJSON !== undefined
+      ? { documentImageLayersJSON: props.documentImageLayersJSON, onImageLayersError: props.onImageLayersError,
+        onImageLayersReady: props.onImageLayersReady } : {}),
     ...(supportsInkDisplayAppearance ? { displayAppearance: props.displayAppearance ?? 'light' } : {}),
     pdfBackgroundUri: props.pdfBackgroundUri,
     renderSuspended: props.renderSuspended,

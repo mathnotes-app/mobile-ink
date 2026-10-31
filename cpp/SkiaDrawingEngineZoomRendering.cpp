@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <include/core/SkBBHFactory.h>
 #include <include/core/SkPictureRecorder.h>
 #include <include/gpu/ganesh/SkSurfaceGanesh.h>
@@ -11,6 +12,7 @@ namespace nativedrawing {
 namespace {
 constexpr int kStrokeTileSize = 512;
 constexpr size_t kMaxStrokeTileCacheBytes = 96 * 1024 * 1024;
+constexpr size_t kMaxCrayonPictureCacheBytes = 32 * 1024 * 1024;
 
 int renderScaleBucket(float scale) {
     const float clamped = std::max(kMinimumRenderScale, std::min(kMaximumRenderScale, scale));
@@ -28,6 +30,38 @@ int renderScaleBucket(float scale) {
 }
 
 } // namespace
+
+sk_sp<SkPicture> SkiaDrawingEngine::crayonPicture(const Stroke& stroke, const SkPaint& paint) {
+    uint32_t widthBits = 0;
+    const float width = paint.getStrokeWidth();
+    static_assert(sizeof(widthBits) == sizeof(width));
+    std::memcpy(&widthBits, &width, sizeof(width));
+    const CrayonPictureKey key{stroke.path.getGenerationID(), displayInkPaint(paint).getColor(), widthBits};
+    auto found = crayonPictureCache_.find(key);
+    if (found != crayonPictureCache_.end()) {
+        found->second.used = ++crayonPictureUseCounter_;
+        return found->second.picture;
+    }
+    SkPictureRecorder recorder;
+    SkRTreeFactory hierarchy;
+    auto* recording = recorder.beginRecording(
+        SkRect::MakeWH(static_cast<float>(width_), static_cast<float>(height_)), &hierarchy);
+    renderStrokeGeometry(recording, stroke, paint);
+    auto picture = recorder.finishRecordingAsPicture();
+    const size_t bytes = picture ? picture->approximateBytesUsed() : 0;
+    if (picture && key.pathID && bytes <= kMaxCrayonPictureCacheBytes) {
+        while (crayonPictureCacheBytes_ + bytes > kMaxCrayonPictureCacheBytes && !crayonPictureCache_.empty()) {
+            auto oldest = crayonPictureCache_.begin();
+            for (auto it = crayonPictureCache_.begin(); it != crayonPictureCache_.end(); ++it)
+                if (it->second.used < oldest->second.used) oldest = it;
+            crayonPictureCacheBytes_ -= oldest->second.bytes;
+            crayonPictureCache_.erase(oldest);
+        }
+        crayonPictureCacheBytes_ += bytes;
+        crayonPictureCache_.emplace(key, CrayonPictureEntry{picture, bytes, ++crayonPictureUseCounter_});
+    }
+    return picture;
+}
 
 void SkiaDrawingEngine::setRenderViewport(
     float renderScale,
@@ -200,10 +234,14 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
     const float tileBottom = static_cast<float>(key.tileY * kStrokeTileSize + tileHeight) / scale;
     SkRect tileBounds = SkRect::MakeLTRB(tileLeft, tileTop, tileRight, tileBottom);
 
+    size_t imageIndex = 0;
     for (size_t i : candidates) {
         const auto& stroke = strokes_[i];
         if (stroke.isEraser) {
             continue;
+        }
+        while (imageIndex < imageLayers_.size() && imageLayers_[imageIndex].layerOrder <= stroke.layerOrder) {
+            renderImageLayer(tileCanvas, imageLayers_[imageIndex++]);
         }
 
         SkRect strokeBounds = stroke.path.getBounds();
@@ -230,17 +268,11 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
         if (stroke.toolType == "crayon" && stroke.points.size() >= 64 && !tileBounds.contains(strokeBounds)) {
             auto it = crayonPictures.find(i);
             if (it == crayonPictures.end()) {
-                // Record the pressure-sensitive textured segments once per
-                // frame. The spatial index skips segments outside each tile,
-                // without changing their order or appearance.
-                SkPictureRecorder recorder;
-                SkRTreeFactory hierarchy;
-                auto* recordingCanvas = recorder.beginRecording(
-                    SkRect::MakeWH(static_cast<float>(width_), static_cast<float>(height_)), &hierarchy);
-                renderStrokeGeometry(recordingCanvas, stroke, strokePaint);
-                it = crayonPictures.emplace(i, recorder.finishRecordingAsPicture()).first;
+                // Keep bounded, immutable geometry across frames so each new
+                // zoom bucket need not rebuild the same crayon segments.
+                it = crayonPictures.emplace(i, crayonPicture(stroke, strokePaint)).first;
             }
-            tileCanvas->drawPicture(it->second);
+            if (it->second) tileCanvas->drawPicture(it->second);
         } else {
             renderStrokeGeometry(tileCanvas, stroke, strokePaint);
         }
@@ -249,6 +281,7 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
             tileCanvas->restore();
         }
     }
+    while (imageIndex < imageLayers_.size()) renderImageLayer(tileCanvas, imageLayers_[imageIndex++]);
 
     if (resolved && resolved.get() != tileSurface.get()) {
         // Cache resolved pixels independently. A snapshot of the multisampled
@@ -299,8 +332,11 @@ void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
         canvas->scale(scale, scale);
         SkRect clip;
         const bool hasClip = canvas->getLocalClipBounds(&clip);
+        size_t imageIndex = 0;
         for (size_t i = 0; i < strokes_.size(); ++i) {
             const auto& stroke = strokes_[i];
+            while (imageIndex < imageLayers_.size() && imageLayers_[imageIndex].layerOrder <= stroke.layerOrder)
+                renderImageLayer(canvas, imageLayers_[imageIndex++]);
             const bool translated = isDraggingSelection_ && selectedIndices_.count(i) > 0;
             SkRect bounds = stroke.path.getBounds();
             const float outset = std::max(8.0f, stroke.paint.getStrokeWidth() * 2.0f);
@@ -333,6 +369,7 @@ void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
             }
             canvas->restore();
         }
+        while (imageIndex < imageLayers_.size()) renderImageLayer(canvas, imageLayers_[imageIndex++]);
         canvas->restore();
         return;
     }

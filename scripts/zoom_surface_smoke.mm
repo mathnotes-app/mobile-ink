@@ -79,6 +79,51 @@ int main() {
     try {
         auto first = makeContext();
         auto second = makeContext();
+        for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
+            SkiaDrawingEngine document(512, 512, true);
+            document.setBackgroundType("pdf");
+            drawLine(document); // Older ink, underneath the image.
+            const auto imageOrder = document.reserveLayerOrder();
+            auto photo = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(32, 32));
+            photo->getCanvas()->clear(SkColorSetARGB(128, 255, 0, 0));
+            nativedrawing::ImageLayer layer;
+            layer.id = "photo"; layer.layerOrder = imageOrder;
+            layer.image = photo->makeImageSnapshot();
+            layer.bounds = SkRect::MakeXYWH(80, 80, 140, 80);
+            document.setImageLayers({layer});
+            document.setToolWithParams("pen", 10, 0x000000, "pixel");
+            document.touchBegan(40, 120, 1);
+            for (int x = 45; x <= 450; x += 5) document.touchMoved(x, 120, 1);
+            document.touchEnded();
+            auto pixels = renderCrop(document, context, 512, 512);
+            auto older = pixels.getColor(100, 100);
+            if (SkColorGetA(older) < 240 || SkColorGetR(older) < 90 || SkColorGetR(older) > 180)
+                throw std::runtime_error("Translucent image did not cover older ink");
+            expectInk(pixels, 100, 120, true, "New ink was not above the image");
+            document.undo();
+            if (SkColorGetA(renderCrop(document, context, 512, 512).getColor(100, 120)) > 180)
+                throw std::runtime_error("Undo did not remove ink over the image");
+            document.redo();
+            expectInk(renderCrop(document, context, 512, 512), 100, 120, true, "Redo lost ink over the image");
+            auto saved = document.snapshotDrawing();
+            const auto groups = nativedrawing::splitStrokesByLayer(saved, {imageOrder});
+            if (groups.size() != 2 || groups[0].size() != 1 || groups[1].size() != 1)
+                throw std::runtime_error("Ink was not split around the image layer");
+            auto withEraser = saved;
+            auto eraser = saved.back(); eraser.isEraser = true; eraser.affectedStrokeIndices = {0, 1};
+            withEraser.push_back(eraser);
+            const auto erasedGroups = nativedrawing::splitStrokesByLayer(withEraser, {imageOrder});
+            if (erasedGroups[0].size() != 2 || erasedGroups[1].size() != 2 ||
+                erasedGroups[0].back().affectedStrokeIndices != std::unordered_set<size_t>{0} ||
+                erasedGroups[1].back().affectedStrokeIndices != std::unordered_set<size_t>{0})
+                throw std::runtime_error("Layer split lost legacy eraser references");
+            SkiaDrawingEngine reloaded(512, 512, true);
+            reloaded.setBackgroundType("pdf"); reloaded.replaceDrawing(saved); reloaded.setImageLayers({layer});
+            auto restored = renderCrop(reloaded, context, 512, 512);
+            expectInk(restored, 100, 120, true, "Reload lost ink above the image");
+            if (SkColorGetR(restored.getColor(100, 100)) < 90)
+                throw std::runtime_error("Reload lost image above older ink");
+        }
         // Compositing ink over inserted images depends on a truly transparent
         // native PNG, including after encoding and decoding the export.
         {
@@ -205,6 +250,43 @@ int main() {
                 if (settled.getColor(x, y) != rebuilt.getColor(x, y))
                     throw std::runtime_error("Settled motion frame differs from a fresh render");
             }
+        }
+        // Reusing recorded crayon geometry across zoom levels must never
+        // retain stale geometry after erasing or moving the stroke.
+        for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
+            SkiaDrawingEngine document(1024, 1024, true);
+            document.setBackgroundType("pdf");
+            document.setHoldToShapeEnabled(false);
+            document.setToolWithParams("crayon", 16, 0xff000000, "pixel");
+            document.touchBegan(30, 300, 0.7);
+            for (int x = 35; x <= 920; x += 5) document.touchMoved(x, 300 + 30 * std::sin(x * .02), 0.7);
+            document.touchEnded();
+            document.setRenderViewport(1, 0, 0, 1024, 1024);
+            renderCrop(document, context, 1024, 1024);
+            document.setRenderViewport(2, 0, 0, 512, 512);
+            renderCrop(document, context, 1024, 1024);
+            document.setToolWithParams("eraser", 24, 0xff000000, "pixel");
+            document.touchBegan(200, 278, 1);
+            document.touchMoved(210, 278, 1);
+            document.touchEnded();
+            auto saved = document.snapshotDrawing();
+            SkiaDrawingEngine fresh(1024, 1024, true);
+            fresh.setBackgroundType("pdf"); fresh.replaceDrawing(saved);
+            fresh.setRenderViewport(2, 0, 0, 512, 512);
+            auto cached = renderCrop(document, context, 1024, 1024);
+            auto expected = renderCrop(fresh, context, 1024, 1024);
+            for (int y = 0; y < 1024; ++y) for (int x = 0; x < 1024; ++x)
+                if (cached.getColor(x, y) != expected.getColor(x, y))
+                    throw std::runtime_error("Reused crayon geometry became stale after erase");
+            if (!document.selectStrokeAt(500, 300 + 30 * std::sin(10.0)))
+                throw std::runtime_error("Cannot select crayon for cache test");
+            document.beginSelectionDrag(); document.moveSelection(0, 40); document.finalizeMove(); document.clearSelection();
+            saved = document.snapshotDrawing(); fresh.replaceDrawing(saved);
+            cached = renderCrop(document, context, 1024, 1024);
+            expected = renderCrop(fresh, context, 1024, 1024);
+            for (int y = 0; y < 1024; ++y) for (int x = 0; x < 1024; ++x)
+                if (cached.getColor(x, y) != expected.getColor(x, y))
+                    throw std::runtime_error("Reused crayon geometry became stale after moving");
         }
         for (auto* context : {first.get(), static_cast<GrDirectContext*>(nullptr)}) {
             SkiaDrawingEngine cached(1024, 2048, true);

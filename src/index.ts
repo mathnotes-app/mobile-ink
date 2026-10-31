@@ -89,7 +89,7 @@ export type {
   ToolType,
 } from "./types";
 
-export { composeDocument, partitionDocument, projectDocumentPages } from "./native-ink-canvas/documentBridge";
+export { composeDocument, partitionDocument, projectDocumentPages, splitProjectedPageByLayers } from "./native-ink-canvas/documentBridge";
 
 export { getDocumentRenderViewport } from "./utils/documentViewport";
 export { resolveDocumentRenderTarget, MAX_NATIVE_RENDER_SCALE, type DocumentRenderTarget, type DocumentRenderLayout } from "./utils/documentRenderTarget";

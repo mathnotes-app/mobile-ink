@@ -18,6 +18,7 @@ import { styles } from './styles';
 
 export type ContinuousDocumentCanvasRef = InfiniteInkCanvasRef & {
   recordExternalEdit: (before: string, after: string) => Promise<boolean>;
+  reserveLayerOrder: () => Promise<number>;
 };
 export type ContinuousDocumentCanvasProps = InfiniteInkCanvasProps & {
   /** Apply this host-owned overlay patch after a native undo/redo. */
@@ -28,6 +29,7 @@ export type ContinuousDocumentCanvasProps = InfiniteInkCanvasProps & {
   onHistoryAction?: (action: "undo" | "redo") => void;
   /** A normal ink or eraser gesture completed, excluding cancelled gestures and history. */
   onStrokeEnd?: (tool: string) => void;
+  documentImageLayersJSON?: string;
 };
 
 /**
@@ -63,6 +65,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
   const callbacks = useRef(props); callbacks.current = props;
   const ready = useRef(false);
   const [inputReady, setInputReady] = useState(false);
+  const [installedImageLayers, setInstalledImageLayers] = useState<string | null>(null);
   const initializing = useRef(false);
   const mounted = useRef(true);
   const currentPage = useRef(0);
@@ -192,6 +195,8 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
     getNotebookData: capture, loadNotebookData: load, addPage,
     recordExternalEdit: (before, after) => ready.current && canvas.current
       ? canvas.current.recordExternalEdit(before, after) : Promise.resolve(false),
+    reserveLayerOrder: () => ready.current && canvas.current
+      ? canvas.current.reserveLayerOrder() : Promise.reject(new Error('Document canvas is not ready')),
     undo: () => { if (ready.current) canvas.current?.undo(); },
     redo: () => { if (ready.current) canvas.current?.redo(); },
     clearCurrentPage: () => { if (ready.current) canvas.current?.clearDocumentPage(currentPage.current, pageHeight * density); },
@@ -244,12 +249,17 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
       transformNotificationMinIntervalMs={props.transformNotificationMinIntervalMs ?? 16}
       onTransformChange={onTransform} onMotionStateChange={onMotionStateChange}>
       <View style={[styles.canvasShell, { paddingTop: contentPadding, paddingBottom: contentPadding }]}>
-        <View testID="continuous-document-input" pointerEvents={inputReady ? "auto" : "none"} style={{ width: pageWidth, height: documentHeight }}>
+        <View testID="continuous-document-input" pointerEvents={inputReady &&
+          (props.documentImageLayersJSON === undefined || props.documentImageLayersJSON === installedImageLayers) ? "auto" : "none"}
+          style={{ width: pageWidth, height: documentHeight }}>
           <PageBackgrounds displayAppearance={props.displayAppearance} pages={pages} pageWidth={pageWidth} pageHeight={pageHeight} backgroundType={props.backgroundType ?? 'plain'}
             pdfBackgroundBaseUri={props.pdfBackgroundBaseUri} visiblePageIndex={visiblePage} showPageLabels={props.showPageLabels ?? true} />
           <View testID="continuous-document-overlay" pointerEvents={overlayInteractive ? 'box-none' : 'none'}
             style={[StyleSheet.absoluteFillObject, { zIndex: overlayInteractive ? 2 : 0 }]}>{props.overlay}</View>
           <NativeInkCanvas displayAppearance={props.displayAppearance} ref={canvas} style={{ ...StyleSheet.absoluteFillObject, zIndex: 1 }} continuousDocument backgroundType="pdf"
+            documentImageLayersJSON={props.documentImageLayersJSON}
+            onImageLayersError={({nativeEvent}) => report(new Error(nativeEvent.message))}
+            onImageLayersReady={({nativeEvent}) => setInstalledImageLayers(nativeEvent.json)}
             renderBackend={props.renderBackend} renderScale={renderTarget.renderScale}
             renderViewportLeftRatio={renderTarget.leftRatio} renderViewportTopRatio={renderTarget.topRatio}
             renderViewportWidthRatio={renderTarget.widthRatio} renderViewportHeightRatio={renderTarget.heightRatio}

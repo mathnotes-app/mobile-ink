@@ -53,12 +53,122 @@ enum PencilStrokeInputNormalizer {
 
 // MARK: - MobileInkCanvasView
 
+private final class ImageLayerWorkToken {
+    private let lock = NSLock()
+    private var cancelled = false
+    func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+    var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+}
+
+private final class ImageAnimationTarget: NSObject {
+    weak var view: MobileInkCanvasView?
+    @objc func tick(_ link: CADisplayLink) { view?.advanceAnimatedImageLayers(at: link.timestamp) }
+}
+
 @objc(MobileInkCanvasView)
 class MobileInkCanvasView: MTKView {
     private static let warmCrayonTextureCache: Void = {
         DispatchQueue.global(qos: .utility).async { warmCrayonTextures() }
     }()
+    private static let imageLayerQueue = DispatchQueue(label: "MobileInk.imageLayers", qos: .userInitiated)
+    private static let imageCacheMemoryObserver = NotificationCenter.default.addObserver(
+        forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil
+    ) { _ in clearDocumentImageCache() }
     var drawingEngine: OpaquePointer?
+    private var imageLayerRevision: UInt64 = 0
+    private var imageLayerWork: ImageLayerWorkToken?
+    private var pendingImageLayers: UnsafeMutableRawPointer?
+    private var pendingImageLayersJSON: String?
+    private var imageAnimationLink: CADisplayLink?
+    private var imageAnimationTarget: ImageAnimationTarget?
+    private var imageFrameUpdatePending = false
+    @objc var onImageLayersError: RCTDirectEventBlock?
+    @objc var onImageLayersReady: RCTDirectEventBlock?
+    @objc var documentImageLayersJSON: String? {
+        didSet {
+            guard oldValue != documentImageLayersJSON, !isReleased else { return }
+            scheduleImageLayersPreparation(documentImageLayersJSON ?? "[]")
+        }
+    }
+
+    private func scheduleImageLayersPreparation(_ json: String) {
+        imageLayerWork?.cancel()
+        let work = ImageLayerWorkToken()
+        imageLayerWork = work
+        imageLayerRevision &+= 1
+        let revision = imageLayerRevision
+        let scale = Double(baseContentScale())
+        Self.imageLayerQueue.async { [weak self] in
+            guard !work.isCancelled else { return }
+            let prepared = json.withCString { prepareDocumentImageLayers($0, scale) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isReleased, self.imageLayerRevision == revision else {
+                    if let prepared { releaseDocumentImageLayers(prepared) }
+                    return
+                }
+                guard let prepared else {
+                    self.onImageLayersError?(["message": "Unable to load an inserted image"])
+                    return
+                }
+                if let pending = self.pendingImageLayers { releaseDocumentImageLayers(pending) }
+                self.pendingImageLayers = prepared
+                self.pendingImageLayersJSON = json
+                self.installPendingImageLayers()
+            }
+        }
+    }
+
+    private func installPendingImageLayers() {
+        guard let engine = drawingEngine, let prepared = pendingImageLayers else { return }
+        pendingImageLayers = nil
+        let animated = documentImageLayersAreAnimated(prepared)
+        installDocumentImageLayers(engine, prepared)
+        releaseDocumentImageLayers(prepared)
+        updateImageAnimationLink(animated)
+        requestDisplay(forceWhenSuspended: true)
+        if let json = pendingImageLayersJSON { onImageLayersReady?(["json": json]) }
+        pendingImageLayersJSON = nil
+    }
+
+    private func updateImageAnimationLink(_ enabled: Bool) {
+        if !enabled || isReleased {
+            imageAnimationLink?.invalidate()
+            imageAnimationLink = nil
+            imageAnimationTarget = nil
+        } else if imageAnimationLink == nil {
+            let target = ImageAnimationTarget()
+            target.view = self
+            let link = CADisplayLink(target: target, selector: #selector(ImageAnimationTarget.tick(_:)))
+            link.preferredFramesPerSecond = 60
+            link.add(to: .main, forMode: .common)
+            imageAnimationTarget = target
+            imageAnimationLink = link
+        }
+    }
+
+    fileprivate func advanceAnimatedImageLayers(at time: CFTimeInterval) {
+        guard !isReleased, window != nil, UIApplication.shared.applicationState == .active,
+              !imageFrameUpdatePending, let engine = drawingEngine,
+              let snapshot = snapshotDocumentImageLayers(engine) else { return }
+        imageFrameUpdatePending = true
+        let revision = imageLayerRevision
+        Self.imageLayerQueue.async { [weak self] in
+            let result = advanceDocumentImageLayers(snapshot, time)
+            DispatchQueue.main.async { [weak self] in
+                defer { releaseDocumentImageLayers(snapshot) }
+                guard let self else { return }
+                self.imageFrameUpdatePending = false
+                guard !self.isReleased, revision == self.imageLayerRevision, let engine = self.drawingEngine else { return }
+                if result < 0 {
+                    self.updateImageAnimationLink(false)
+                    self.onImageLayersError?(["message": "Unable to decode an animated image frame"])
+                } else if result > 0 {
+                    installAnimatedDocumentImageLayers(engine, snapshot)
+                    self.requestDisplay(forceWhenSuspended: true)
+                }
+            }
+        }
+    }
     private var commandQueue: MTLCommandQueue?
     private var ganeshMetalContext: OpaquePointer?
     private var ganeshPreparationAttempted = false
@@ -339,6 +449,7 @@ class MobileInkCanvasView: MTKView {
         super.init(frame: frame, device: metalDevice)
 
         _ = Self.warmCrayonTextureCache
+        _ = Self.imageCacheMemoryObserver
 
         self.isOpaque = false // Transparent to show background underneath
         self.backgroundColor = .clear
@@ -422,6 +533,12 @@ class MobileInkCanvasView: MTKView {
     func releaseHeavyNativeState() {
         if isReleased { return }
         isReleased = true
+        updateImageAnimationLink(false)
+        imageLayerWork?.cancel()
+        imageLayerWork = nil
+        imageLayerRevision &+= 1
+        if let pending = pendingImageLayers { releaseDocumentImageLayers(pending); pendingImageLayers = nil }
+        pendingImageLayersJSON = nil
         frameAcquisition.cancel()
         hasPendingFrame = false
         pendingFrameRequestedAt = nil
@@ -1768,6 +1885,9 @@ class MobileInkCanvasView: MTKView {
         guard let engine = drawingEngine else {
             return
         }
+
+        if pendingImageLayers != nil { installPendingImageLayers() }
+        else if let json = documentImageLayersJSON { scheduleImageLayersPreparation(json) }
 
         setHoldToShapeEnabled(engine, holdToShapeEnabled)
         setViewportMotionActive(engine, viewportMotionActive)
