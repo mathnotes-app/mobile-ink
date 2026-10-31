@@ -1,12 +1,14 @@
 #include "PathRenderer.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 #include <include/core/SkColorFilter.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkSamplingOptions.h>
 #include <include/core/SkSurface.h>
+#include <include/core/SkVertices.h>
 #include <include/effects/SkColorMatrix.h>
 #include <include/effects/SkPerlinNoiseShader.h>
 
@@ -163,20 +165,27 @@ void PathRenderer::drawCrayonPath(
         batchPaint.setAntiAlias(false);  // No AA - let texture create rough edges
         batchPaint.setAlpha(255);
 
-        // Build path for this micro-batch
-        SkPath batchPath;
-        batchPath.moveTo(edges[batchStart].left);
-
-        for (size_t i = batchStart + 1; i <= batchEnd; i++) {
-            batchPath.lineTo(edges[i].left);
+        // Adjacent left/right edge pairs already define the strip. Supplying
+        // it directly avoids triangulating every pressure batch on the UI
+        // thread whenever a zoom tile is rendered.
+        std::array<SkPoint, (BATCH_SIZE + 1) * 2> vertices;
+        int vertexCount = 0;
+        for (size_t i = batchStart; i <= batchEnd; ++i) {
+            vertices[vertexCount++] = edges[i].left;
+            vertices[vertexCount++] = edges[i].right;
         }
-
-        for (int i = static_cast<int>(batchEnd); i >= static_cast<int>(batchStart); i--) {
-            batchPath.lineTo(edges[i].right);
+        auto mesh = SkVertices::MakeCopy(SkVertices::kTriangleStrip_VertexMode,
+            vertexCount, vertices.data(), nullptr, nullptr);
+        if (mesh) {
+            canvas->drawVertices(mesh, SkBlendMode::kModulate, batchPaint);
+        } else {
+            SkPath path;
+            path.moveTo(edges[batchStart].left);
+            for (size_t i = batchStart + 1; i <= batchEnd; ++i) path.lineTo(edges[i].left);
+            for (size_t i = batchEnd + 1; i-- > batchStart;) path.lineTo(edges[i].right);
+            path.close();
+            canvas->drawPath(path, batchPaint);
         }
-
-        batchPath.close();
-        canvas->drawPath(batchPath, batchPaint);
     }
 
     // ===== TEXTURED END CAPS =====
