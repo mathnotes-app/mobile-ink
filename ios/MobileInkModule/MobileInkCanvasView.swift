@@ -55,6 +55,9 @@ enum PencilStrokeInputNormalizer {
 
 @objc(MobileInkCanvasView)
 class MobileInkCanvasView: MTKView {
+    private static let warmCrayonTextureCache: Void = {
+        DispatchQueue.global(qos: .utility).async { warmCrayonTextures() }
+    }()
     var drawingEngine: OpaquePointer?
     private var commandQueue: MTLCommandQueue?
     private var ganeshMetalContext: OpaquePointer?
@@ -334,6 +337,8 @@ class MobileInkCanvasView: MTKView {
         self.interactionAudit = MobileInkInteractionAudit(recorder: recorder)
         let metalDevice = device ?? MTLCreateSystemDefaultDevice()
         super.init(frame: frame, device: metalDevice)
+
+        _ = Self.warmCrayonTextureCache
 
         self.isOpaque = false // Transparent to show background underneath
         self.backgroundColor = .clear

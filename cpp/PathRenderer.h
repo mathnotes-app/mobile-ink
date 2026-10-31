@@ -33,6 +33,7 @@ struct IncrementalResult {
 class PathRenderer {
 public:
     PathRenderer() = default;
+    static void warmCrayonTextures();
 
     // Draw a variable-width path based on point data
     // applyPressureAlpha: If true, modulates alpha based on average pressure

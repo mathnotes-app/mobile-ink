@@ -5,6 +5,7 @@
 #include "cpp/SkiaDrawingEngine.h"
 #include "cpp/DrawingSerialization.h"
 #include "cpp/DisplayAppearance.h"
+#include "cpp/PathRenderer.h"
 
 // Additional Skia includes for batch export PDF handling
 // Note: SkImages namespace functions are in SkImage.h
@@ -265,6 +266,10 @@ bool updateHoldShapePreview(void* engine, long timestamp) {
 
 void setHoldToShapeEnabled(void* engine, bool enabled) {
     if (engine) static_cast<SkiaDrawingEngine*>(engine)->setHoldToShapeEnabled(enabled);
+}
+
+void warmCrayonTextures() {
+    nativedrawing::PathRenderer::warmCrayonTextures();
 }
 
 void setViewportMotionActive(void* engine, bool active) {

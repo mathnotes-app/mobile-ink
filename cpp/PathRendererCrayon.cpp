@@ -4,10 +4,45 @@
 #include <cmath>
 
 #include <include/core/SkColorFilter.h>
+#include <include/core/SkImage.h>
+#include <include/core/SkSamplingOptions.h>
+#include <include/core/SkSurface.h>
 #include <include/effects/SkColorMatrix.h>
 #include <include/effects/SkPerlinNoiseShader.h>
 
 namespace nativedrawing {
+
+namespace {
+sk_sp<SkShader> makeCrayonNoiseTexture(float x, float y, int octaves, float seed) {
+    constexpr int side = 512;
+    auto surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(side, side));
+    if (!surface) return nullptr;
+    const SkISize tileSize = SkISize::Make(side, side);
+    auto noise = SkShaders::MakeTurbulence(x, y, octaves, seed, &tileSize);
+    if (!noise) return nullptr;
+    SkPaint paint;
+    paint.setShader(noise);
+    surface->getCanvas()->drawPaint(paint);
+    auto image = surface->makeImageSnapshot();
+    return image ? image->makeShader(SkTileMode::kRepeat, SkTileMode::kRepeat,
+                                     SkSamplingOptions(SkFilterMode::kLinear)) : nullptr;
+}
+
+struct CrayonTextures {
+    sk_sp<SkShader> grain = makeCrayonNoiseTexture(0.008f, 0.35f, 4, 0.0f);
+    sk_sp<SkShader> paper = makeCrayonNoiseTexture(0.12f, 0.12f, 3, 42.0f);
+};
+
+const CrayonTextures& crayonTextures() {
+    // Immutable raster textures are shared across canvases and GPU contexts.
+    static const CrayonTextures textures;
+    return textures;
+}
+} // namespace
+
+void PathRenderer::warmCrayonTextures() {
+    (void)crayonTextures();
+}
 
 sk_sp<SkShader> PathRenderer::createCrayonShader(SkColor baseColor, float pressure, float width, float strokeAngle) {
     // ===== CHECK SHADER CACHE FIRST =====
@@ -28,12 +63,9 @@ sk_sp<SkShader> PathRenderer::createCrayonShader(SkColor baseColor, float pressu
     float freqAlong = 0.008f;   // Very low = long continuous streaks
     float freqAcross = 0.35f;   // Very high = fine perpendicular detail (44:1 ratio)
 
-    sk_sp<SkShader> grainNoise = SkShaders::MakeTurbulence(
-        freqAlong, freqAcross,
-        4,      // High octaves for detail
-        0.0f,
-        nullptr
-    );
+    const auto& textures = crayonTextures();
+    sk_sp<SkShader> grainNoise = textures.grain
+        ? textures.grain : SkShaders::MakeTurbulence(freqAlong, freqAcross, 4, 0.0f, nullptr);
 
     // Rotate grain to follow stroke direction
     SkMatrix rotationMatrix;
@@ -43,12 +75,8 @@ sk_sp<SkShader> PathRenderer::createCrayonShader(SkColor baseColor, float pressu
 
     // ===== LAYER 2: PAPER GRAIN (finer) =====
     // Simulates paper texture that wax deposits on
-    sk_sp<SkShader> paperNoise = SkShaders::MakeTurbulence(
-        0.12f, 0.12f,  // Finer grain for paper texture
-        3,
-        42.0f,
-        nullptr
-    );
+    sk_sp<SkShader> paperNoise = textures.paper
+        ? textures.paper : SkShaders::MakeTurbulence(0.12f, 0.12f, 3, 42.0f, nullptr);
 
     // ===== COMBINE: Multiply creates realistic wax-on-paper =====
     sk_sp<SkShader> combinedNoise = SkShaders::Blend(

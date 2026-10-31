@@ -35,6 +35,8 @@ func updateHoldShapePreview(_ engine: OpaquePointer, _ timestamp: Int64) -> Bool
 func setHoldToShapeEnabled(_ engine: OpaquePointer, _ enabled: Bool)
 @_silgen_name("setViewportMotionActive")
 func setViewportMotionActive(_ engine: OpaquePointer, _ active: Bool)
+@_silgen_name("warmCrayonTextures")
+func warmCrayonTextures()
 
 // MARK: - Predictive Touch (Apple Pencil low-latency rendering)
 @_silgen_name("clearPredictedPoints")

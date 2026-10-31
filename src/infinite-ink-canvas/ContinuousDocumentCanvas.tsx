@@ -85,6 +85,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
   const blockedTouchRects = useMemo(() => [...selectionRects, ...(props.blockedTouchRects ?? [])],
     [props.blockedTouchRects, selectionRects]);
   const documentHeight = pages.length * pageHeight;
+  const overlayInteractive = ['select', 'text', 'insert'].includes(toolState.toolType);
   const density = PixelRatio.get();
   const report = useCallback((error: unknown) => {
     const failure = error instanceof Error ? error : new Error(String(error));
@@ -246,7 +247,9 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
         <View testID="continuous-document-input" pointerEvents={inputReady ? "auto" : "none"} style={{ width: pageWidth, height: documentHeight }}>
           <PageBackgrounds displayAppearance={props.displayAppearance} pages={pages} pageWidth={pageWidth} pageHeight={pageHeight} backgroundType={props.backgroundType ?? 'plain'}
             pdfBackgroundBaseUri={props.pdfBackgroundBaseUri} visiblePageIndex={visiblePage} showPageLabels={props.showPageLabels ?? true} />
-          <NativeInkCanvas displayAppearance={props.displayAppearance} ref={canvas} style={StyleSheet.absoluteFillObject} continuousDocument backgroundType="pdf"
+          <View testID="continuous-document-overlay" pointerEvents={overlayInteractive ? 'box-none' : 'none'}
+            style={[StyleSheet.absoluteFillObject, { zIndex: overlayInteractive ? 2 : 0 }]}>{props.overlay}</View>
+          <NativeInkCanvas displayAppearance={props.displayAppearance} ref={canvas} style={{ ...StyleSheet.absoluteFillObject, zIndex: 1 }} continuousDocument backgroundType="pdf"
             renderBackend={props.renderBackend} renderScale={renderTarget.renderScale}
             renderViewportLeftRatio={renderTarget.leftRatio} renderViewportTopRatio={renderTarget.topRatio}
             renderViewportWidthRatio={renderTarget.widthRatio} renderViewportHeightRatio={renderTarget.heightRatio}
@@ -290,7 +293,6 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
               if (page) callbacks.current.onSelectionChange?.(page.id, count, bounds ? { ...bounds, y: bounds.y - index * pageHeight } : null);
             }}
             onPencilDoubleTap={event => callbacks.current.onPencilDoubleTap?.(event)} />
-          {props.overlay}
           <PageBreaks pages={pages} pageHeight={pageHeight} displayAppearance={props.displayAppearance} />
         </View>
       </View>

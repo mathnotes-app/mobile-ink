@@ -48,6 +48,18 @@ it('uses cached ink during movement and requests full quality after it settles',
   expect(mockProps.viewportMotionActive).toBe(false);
   tree.unmount();
 });
+it('keeps overlays below ink while drawing and makes them selectable with the lasso', async () => {
+  const tool = {toolType: 'pen' as const, width: 2, color: '#000000', eraserMode: 'pixel' as const};
+  const tree = render(<ContinuousDocumentCanvas initialData={data} toolState={tool} />);
+  await act(async () => {});
+  expect(tree.getByTestId('continuous-document-overlay').props.pointerEvents).toBe('none');
+  expect(mockProps.style.zIndex).toBe(1);
+  expect(require('react-native').StyleSheet.flatten(tree.getByTestId('continuous-document-overlay').props.style).zIndex).toBe(0);
+  tree.rerender(<ContinuousDocumentCanvas initialData={data} toolState={{...tool, toolType: 'select'}} />);
+  expect(tree.getByTestId('continuous-document-overlay').props.pointerEvents).toBe('box-none');
+  expect(require('react-native').StyleSheet.flatten(tree.getByTestId('continuous-document-overlay').props.style).zIndex).toBe(2);
+  tree.unmount();
+});
 it('retains blank pages and captures the whole document in order', async () => {
   const { ref, tree } = await setup();
   expect(mockLoad.mock.calls[0][0]).toHaveLength(2);
