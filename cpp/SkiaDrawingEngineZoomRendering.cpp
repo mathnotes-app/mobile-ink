@@ -306,11 +306,22 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
         strokePaint.setAlpha(static_cast<uint8_t>(baseAlpha * stroke.originalAlphaMod));
 
         bool needsClipRestore = false;
+        bool clearCrayonMask = false;
         if (!stroke.erasedBy.empty()) {
             stroke.ensureEraserCacheValid();
             if (!stroke.cachedEraserPath.isEmpty()) {
-                tileCanvas->save();
-                tileCanvas->clipPath(stroke.cachedEraserPath, SkClipOp::kDifference);
+                if (stroke.toolType == "crayon") {
+                    // Apply the mask once to the finished crayon stroke. A
+                    // complex clip otherwise has to be prepared for each of
+                    // the textured stroke's many draw operations.
+                    SkRect layerBounds;
+                    if (!layerBounds.intersect(strokeBounds, tileBounds)) continue;
+                    tileCanvas->saveLayer(&layerBounds, nullptr);
+                    clearCrayonMask = true;
+                } else {
+                    tileCanvas->save();
+                    tileCanvas->clipPath(stroke.cachedEraserPath, SkClipOp::kDifference);
+                }
                 needsClipRestore = true;
             }
         }
@@ -327,6 +338,11 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
             renderStrokeGeometry(tileCanvas, stroke, strokePaint);
         }
 
+        if (clearCrayonMask) {
+            SkPaint clearPaint;
+            clearPaint.setBlendMode(SkBlendMode::kClear);
+            tileCanvas->drawPath(stroke.cachedEraserPath, clearPaint);
+        }
         if (needsClipRestore) {
             tileCanvas->restore();
         }

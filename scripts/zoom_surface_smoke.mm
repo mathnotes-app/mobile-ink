@@ -81,6 +81,71 @@ int main() {
     try {
         auto first = makeContext();
         auto second = makeContext();
+        // A fast erase arrives as widely spaced input points. Its live and
+        // committed edges must remain straight, including between samples.
+        for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
+            SkiaDrawingEngine document(512, 512, true);
+            document.setBackgroundType("pdf");
+            document.setRenderViewport(1, 0, 0, 512, 512);
+            document.setToolWithParams("pen", 80, 0xff000000, "pixel");
+            document.touchBegan(40, 200, 1);
+            for (int x = 45; x <= 450; x += 5) document.touchMoved(x, 200, 1);
+            document.touchEnded();
+            document.setToolWithParams("eraser", 20, 0xff000000, "pixel");
+            document.touchBegan(100, 200, 1);
+            document.touchMoved(300, 200, 1);
+            auto live = renderCrop(document, context, 512, 512);
+            for (int x = 110; x < 290; ++x) {
+                expectInk(live, x, 208, false, "Live fast erase left scalloped edges");
+                expectInk(live, x, 212, true, "Live fast erase removed ink outside its edge");
+            }
+            document.touchEnded();
+            auto saved = document.snapshotDrawing();
+            if (saved.empty() || saved[0].erasedBy.size() < 3)
+                throw std::runtime_error("Fast erase did not preserve its samples");
+            for (size_t i = 1; i < saved[0].erasedBy.size(); ++i)
+                if (saved[0].erasedBy[i].x < saved[0].erasedBy[i - 1].x)
+                    throw std::runtime_error("Fast erase samples were recorded out of order");
+            auto committed = renderCrop(document, context, 512, 512);
+            for (int x = 110; x < 290; ++x) {
+                expectInk(committed, x, 208, false, "Committed fast erase left scalloped edges");
+                expectInk(committed, x, 212, true, "Committed fast erase removed ink outside its edge");
+            }
+        }
+        // Erasing textured ink must reveal the image underneath without
+        // clearing that image or changing the ink's place in the stack.
+        for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
+            SkiaDrawingEngine document(512, 512, true);
+            document.setBackgroundType("pdf");
+            document.setRenderViewport(1, 0, 0, 512, 512);
+            auto imageSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(8, 8));
+            imageSurface->getCanvas()->clear(SK_ColorRED);
+            nativedrawing::ImageLayer image;
+            image.id = "under-crayon";
+            image.layerOrder = document.reserveLayerOrder();
+            image.image = imageSurface->makeImageSnapshot();
+            image.bounds = SkRect::MakeXYWH(0, 0, 512, 512);
+            document.setImageLayers({image});
+            document.setToolWithParams("crayon", 40, 0xff000000, "pixel");
+            document.touchBegan(50, 200, .7);
+            for (int x = 55; x <= 450; x += 5) document.touchMoved(x, 200, .7);
+            document.touchEnded();
+            document.setToolWithParams("eraser", 30, 0xff000000, "pixel");
+            document.touchBegan(250, 170, 1);
+            document.touchMoved(250, 230, 1);
+            document.touchEnded();
+            auto pixels = renderCrop(document, context, 512, 512);
+            if (pixels.getColor(250, 200) != SK_ColorRED)
+                throw std::runtime_error("Erasing crayon changed its underlying image");
+            if (pixels.getColor(100, 200) == SK_ColorRED)
+                throw std::runtime_error("Erasing crayon removed unrelated ink");
+            document.undo();
+            if (renderCrop(document, context, 512, 512).getColor(250, 200) == SK_ColorRED)
+                throw std::runtime_error("Undo failed to restore erased crayon");
+            document.redo();
+            if (renderCrop(document, context, 512, 512).getColor(250, 200) != SK_ColorRED)
+                throw std::runtime_error("Redo failed to restore the crayon cutout");
+        }
         {
             nativedrawing::clearEraserMaskOptimizationCache();
             nativedrawing::EraserMaskOptimizationBatch invalid;

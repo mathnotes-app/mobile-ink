@@ -159,6 +159,11 @@ void SkiaDrawingEngine::touchBegan(
 
     currentPath_.moveTo(x, y);
 
+    if (currentTool_ == "eraser" && eraserMode_ == "pixel") {
+        hasLastEraserPoint_ = false;
+        applyPixelEraserAt(x, y, currentPaint_.getStrokeWidth() / 2.0f);
+    }
+
     // Start lasso selection if tool is select
     if (currentTool_ == "select") {
         selection_->lassoBegin(x, y);
@@ -196,9 +201,8 @@ void SkiaDrawingEngine::touchMoved(
     }
 
     const bool enhancedPenProfile = usesEnhancedPenProfile(currentTool_, isPencilInput);
-    const float coordinateSmoothingFactor = enhancedPenProfile
-        ? kPenCoordinateSmoothing
-        : kDefaultCoordinateSmoothing;
+    const float coordinateSmoothingFactor = currentTool_ == "eraser" ? 1.0f :
+        (enhancedPenProfile ? kPenCoordinateSmoothing : kDefaultCoordinateSmoothing);
     const float pressureSmoothingFactor = enhancedPenProfile
         ? kPenPressureSmoothing
         : kDefaultPressureSmoothing;

@@ -116,7 +116,6 @@ void SkiaDrawingEngine::resetPendingPixelErase() {
 void SkiaDrawingEngine::applyPixelEraserAt(float eraserX, float eraserY, float radius) {
     // Build list of circles to add (may include interpolated circles for full coverage)
     std::vector<EraserCircle> circlesToAdd;
-    circlesToAdd.push_back({eraserX, eraserY, radius});
 
     // Add intermediate circles along path from last position for full coverage
     if (hasLastEraserPoint_) {
@@ -137,16 +136,32 @@ void SkiaDrawingEngine::applyPixelEraserAt(float eraserX, float eraserY, float r
             }
         }
     }
+    // Keep the samples in the order the eraser travelled. The cached mask
+    // joins consecutive samples, so adding the endpoint before intermediate
+    // points introduces backwards segments and visible scallops.
+    circlesToAdd.push_back({eraserX, eraserY, radius});
 
     pendingPixelEraserCircles_.insert(
         pendingPixelEraserCircles_.end(),
         circlesToAdd.begin(),
         circlesToAdd.end()
     );
-    // Mirror the circles into a cached path so the zoomed cutout overlay
-    // doesn't rebuild an ever-growing path on every frame of the drag.
-    for (const auto& circle : circlesToAdd) {
-        pendingPixelEraserPath_.addCircle(circle.x, circle.y, circle.radius);
+    // The live cutout must match the continuous, round-ended erase gesture,
+    // rather than exposing the overlapping circles along its edges.
+    pendingPixelEraserPath_.addCircle(eraserX, eraserY, radius);
+    if (hasLastEraserPoint_) {
+        const float dx = eraserX - lastEraserX_;
+        const float dy = eraserY - lastEraserY_;
+        const float distance = std::sqrt(dx * dx + dy * dy);
+        if (distance > 0) {
+            const float nx = -dy / distance;
+            const float ny = dx / distance;
+            pendingPixelEraserPath_.moveTo(lastEraserX_ + nx * lastEraserRadius_, lastEraserY_ + ny * lastEraserRadius_);
+            pendingPixelEraserPath_.lineTo(lastEraserX_ - nx * lastEraserRadius_, lastEraserY_ - ny * lastEraserRadius_);
+            pendingPixelEraserPath_.lineTo(eraserX - nx * radius, eraserY - ny * radius);
+            pendingPixelEraserPath_.lineTo(eraserX + nx * radius, eraserY + ny * radius);
+            pendingPixelEraserPath_.close();
+        }
     }
 
     // Apply kClear directly to strokeSurface_ for instant feedback. Stroke
@@ -189,8 +204,7 @@ bool SkiaDrawingEngine::applyPendingPixelEraseToStrokes() {
         return false;
     }
 
-    // The pending path is exactly the pending circles, so its bounds are the
-    // union of their bounds.
+    // The live path covers the entire gesture, including its round ends.
     const SkRect eraseBounds = pendingPixelEraserPath_.getBounds();
 
     std::vector<SkRect> circleBounds;
