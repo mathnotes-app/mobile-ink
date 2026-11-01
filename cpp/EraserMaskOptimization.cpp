@@ -10,7 +10,9 @@
 namespace nativedrawing {
 namespace {
 constexpr size_t kMinimumEraserCircles = 128;
-constexpr size_t kMaximumEraserCirclesPerStroke = 20000;
+// PathOps cannot be interrupted once started. Bound each job so a newly
+// started gesture does not contend with a multi-second simplification.
+constexpr size_t kMaximumEraserCirclesPerStroke = 512;
 constexpr size_t kMaximumSnapshotCircles = 2 * 1024 * 1024;
 constexpr int kMaximumMaskVerbs = 25000;
 constexpr size_t kMaximumReusableMaskBytes = 32 * 1024 * 1024;
@@ -84,7 +86,7 @@ std::unique_ptr<EraserMaskOptimizationBatch> SkiaDrawingEngine::snapshotEraserMa
         indices.push_back(i);
     }
     std::sort(indices.begin(), indices.end(), [this](size_t a, size_t b) {
-        return strokes_[a].erasedBy.size() > strokes_[b].erasedBy.size();
+        return strokes_[a].erasedBy.size() < strokes_[b].erasedBy.size();
     });
     size_t circleCount = 0;
     for (size_t i : indices) {
