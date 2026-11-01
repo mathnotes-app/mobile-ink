@@ -1,5 +1,5 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { PixelRatio, Platform, StyleSheet, View } from 'react-native';
+import { PixelRatio, Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NativeInkCanvas, type NativeInkCanvasRef } from '../NativeInkCanvas';
 import ZoomableInkViewport, { type ZoomableInkViewportRef, type TouchExclusionRect } from '../ZoomableInkViewport';
@@ -75,6 +75,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
   const appendAfterStroke = useRef(false);
   const dirtyPages = useRef(new Set<string>());
   const [visiblePage, setVisiblePage] = useState(0);
+  const { height: viewportHeight } = useWindowDimensions();
   // Viewport updates arrive every frame; only a changed render target may
   // re-render this tree or the native surface (see resolveDocumentRenderTarget).
   const transformRef = useRef<InfiniteInkViewportTransform | null>(null);
@@ -356,7 +357,8 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
               if (page) callbacks.current.onSelectionChange?.(page.id, count, bounds ? { ...bounds, y: bounds.y - index * pageHeight } : null);
             }}
             onPencilDoubleTap={event => callbacks.current.onPencilDoubleTap?.(event)} />
-          <PageBreaks pages={pages} pageHeight={pageHeight} displayAppearance={props.displayAppearance} />
+          <PageBreaks pages={pages} pageHeight={pageHeight} displayAppearance={props.displayAppearance}
+            visiblePageIndex={visiblePage} viewportHeight={viewportHeight} minimumScale={props.minScale ?? 1} />
         </View>
       </View>
     </ZoomableInkViewport>
