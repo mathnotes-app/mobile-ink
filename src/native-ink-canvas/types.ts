@@ -32,6 +32,9 @@ export interface NativeInkCanvasProps {
   renderViewportTopRatio?: number;
   renderViewportWidthRatio?: number;
   renderViewportHeightRatio?: number;
+  /** Internal iOS hint for preparing a sharp continuous-document viewport. */
+  zoomPreparationTarget?: string;
+  onZoomPreparationReady?: (event: NativeSyntheticEvent<{ json: string }>) => void;
   /** iOS only: Controls whether fingers or only Apple Pencil can draw */
   drawingPolicy?: "default" | "anyinput" | "pencilonly";
   /** Whether holding a stroke converts it to a recognized shape. Defaults to true. */

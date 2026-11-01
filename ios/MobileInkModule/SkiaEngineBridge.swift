@@ -39,6 +39,19 @@ func setViewportMotionActive(_ engine: OpaquePointer, _ active: Bool)
 func warmCrayonTextures()
 @_silgen_name("snapshotEraserMasks")
 func snapshotEraserMasks(_ engine: OpaquePointer) -> UnsafeMutableRawPointer?
+@_silgen_name("snapshotZoomTiles")
+func snapshotZoomTiles(_ engine: OpaquePointer, _ scale: Float, _ left: Float, _ top: Float,
+                       _ width: Float, _ height: Float) -> UnsafeMutableRawPointer?
+@_silgen_name("prepareNextZoomTile")
+func prepareNextZoomTile(_ snapshot: UnsafeMutableRawPointer, _ context: OpaquePointer) -> Int32
+@_silgen_name("limitZoomTileContext")
+func limitZoomTileContext(_ context: OpaquePointer)
+@_silgen_name("installPreparedZoomTile")
+func installPreparedZoomTile(_ engine: OpaquePointer, _ snapshot: UnsafeMutableRawPointer) -> Bool
+@_silgen_name("hasPreparedZoomTiles")
+func hasPreparedZoomTiles(_ engine: OpaquePointer, _ snapshot: UnsafeMutableRawPointer) -> Bool
+@_silgen_name("releaseZoomTileSnapshot")
+func releaseZoomTileSnapshot(_ snapshot: UnsafeMutableRawPointer)
 @_silgen_name("optimizeNextEraserMask")
 func optimizeNextEraserMask(_ snapshot: UnsafeMutableRawPointer) -> Int32
 @_silgen_name("installOptimizedEraserMask")

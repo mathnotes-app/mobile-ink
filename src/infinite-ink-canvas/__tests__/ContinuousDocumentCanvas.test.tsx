@@ -60,6 +60,32 @@ it('uses cached ink during movement and requests full quality after it settles',
   expect(mockProps.viewportMotionActive).toBe(false);
   tree.unmount();
 });
+it('uses a prepared sharp target during a pinch only while it still covers the current zoom', async () => {
+  const { tree } = await setup();
+  const transform = (scale: number) => ({ scale, translateX: 0, translateY: 0, containerWidth: 600, containerHeight: 800 });
+  act(() => { mockViewportProps.onMotionStateChange(true); mockViewportProps.onTransformChange(transform(2)); });
+  const prepared = mockProps.zoomPreparationTarget;
+  expect(JSON.parse(prepared).renderScale).toBe(2);
+  expect(mockProps.renderScale).toBe(1);
+  act(() => mockProps.onZoomPreparationReady({ nativeEvent: { json: prepared } }));
+  expect(mockProps.renderScale).toBe(2);
+  act(() => mockViewportProps.onTransformChange(transform(3)));
+  expect(JSON.parse(mockProps.zoomPreparationTarget).renderScale).toBe(3);
+  act(() => mockProps.onZoomPreparationReady({ nativeEvent: { json: prepared } }));
+  expect(mockProps.renderScale).toBe(2);
+  act(() => mockProps.onZoomPreparationReady({ nativeEvent: { json: '{"renderScale":3}' } }));
+  expect(mockProps.renderScale).toBe(2);
+  tree.unmount();
+});
+it('does not schedule Metal zoom preparation for the CPU renderer', async () => {
+  const tree = render(<ContinuousDocumentCanvas initialData={data} renderBackend="cpu"
+    toolState={{ toolType: 'pen', width: 2, color: '#000000', eraserMode: 'pixel' }} />);
+  await act(async () => {});
+  act(() => { mockViewportProps.onMotionStateChange(true); mockViewportProps.onTransformChange({ scale: 2,
+    translateX: 0, translateY: 0, containerWidth: 600, containerHeight: 800 }); });
+  expect(mockProps.zoomPreparationTarget).toBeUndefined();
+  tree.unmount();
+});
 it('keeps overlays below ink while drawing and makes them selectable with the lasso', async () => {
   const tool = {toolType: 'pen' as const, width: 2, color: '#000000', eraserMode: 'pixel' as const};
   const tree = render(<ContinuousDocumentCanvas initialData={data} toolState={tool} />);

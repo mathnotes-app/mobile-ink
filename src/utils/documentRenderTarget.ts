@@ -21,6 +21,8 @@ export type DocumentRenderLayout = {
   pixelRatio?: number;
   /** Highest native render scale; defaults to MAX_NATIVE_RENDER_SCALE. */
   maxRenderScale?: number;
+  /** Fraction of the visible span to include beyond each edge. */
+  overscanFraction?: number;
 };
 
 /** Native engines clamp render scale to this (kMaximumRenderScale in C++). */
@@ -54,9 +56,9 @@ const fitsPixelCap = (rect: Rect, scale: number, pixelRatio: number) => {
 };
 
 /** Grow a visible span by the overscan, capped and clamped to [0, extent]. */
-const expandSpan = (start: number, end: number, extent: number, limit: number): [number, number] => {
+const expandSpan = (start: number, end: number, extent: number, limit: number, overscan: number): [number, number] => {
   const size = end - start;
-  const desired = Math.max(size, Math.min(limit, size * (1 + 2 * OVERSCAN_FRACTION)));
+  const desired = Math.max(size, Math.min(limit, size * (1 + 2 * overscan)));
   const length = Math.min(extent, desired);
   const center = (start + end) / 2;
   const from = Math.max(0, Math.min(extent - length, center - length / 2));
@@ -88,6 +90,8 @@ export function resolveDocumentRenderTarget(
   const requestedRatio = layout.pixelRatio ?? PixelRatio.get();
   const pixelRatio = Math.max(1, Number.isFinite(requestedRatio) ? requestedRatio : 1);
   const maxRenderScale = layout.maxRenderScale ?? MAX_NATIVE_RENDER_SCALE;
+  const overscan = Math.max(0, Math.min(OVERSCAN_FRACTION,
+    finite(layout.overscanFraction ?? OVERSCAN_FRACTION, OVERSCAN_FRACTION)));
   const visible = toRect(getDocumentRenderViewport(transform, pageWidth, pageHeight,
     pageCount, contentPadding), width, height);
   // Prefer the nearest bucket for crisp settled ink; the lower bucket always
@@ -118,8 +122,8 @@ export function resolveDocumentRenderTarget(
   }
 
   const limit = MAX_TARGET_SIDE_PIXELS / (pixelRatio * scale);
-  const [left, right] = expandSpan(visible.left, visible.right, width, limit);
-  const [top, bottom] = expandSpan(visible.top, visible.bottom, height, limit);
+  const [left, right] = expandSpan(visible.left, visible.right, width, limit, overscan);
+  const [top, bottom] = expandSpan(visible.top, visible.bottom, height, limit, overscan);
   return {
     renderScale: scale,
     leftRatio: left / width,

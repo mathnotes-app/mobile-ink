@@ -7,6 +7,7 @@
 #include "cpp/DisplayAppearance.h"
 #include "cpp/PathRenderer.h"
 #include "cpp/EraserMaskOptimization.h"
+#include "cpp/StrokeTilePreparation.h"
 
 // Additional Skia includes for batch export PDF handling
 // Note: SkImages namespace functions are in SkImage.h
@@ -226,6 +227,46 @@ using namespace nativedrawing;
 
 // C wrapper functions for Swift
 extern "C" {
+void* snapshotZoomTiles(void* engine, float scale, float left, float top, float width, float height) {
+    if (!engine) return nullptr;
+    try { return static_cast<SkiaDrawingEngine*>(engine)->prepareStrokeTiles(scale, left, top, width, height).release(); }
+    catch (...) { NSLog(@"[MobileInk] Could not snapshot zoom tiles"); return nullptr; }
+}
+
+void limitZoomTileContext(void* contextPtr) {
+    if (!contextPtr) return;
+    auto* context = static_cast<sk_sp<GrDirectContext>*>(contextPtr)->get();
+    if (context) context->setResourceCacheLimit(32 * 1024 * 1024);
+}
+
+int prepareNextZoomTile(void* snapshot, void* contextPtr) {
+    if (!snapshot || !contextPtr) return -1;
+    try {
+        auto* context = static_cast<sk_sp<GrDirectContext>*>(contextPtr)->get();
+        auto surface = context ? SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes,
+            SkImageInfo::MakeN32Premul(1, 1)) : nullptr;
+        if (!surface) return -1;
+        return SkiaDrawingEngine::renderPreparedStrokeTile(*static_cast<StrokeTilePreparation*>(snapshot),
+                                                           surface->getCanvas(), context);
+    } catch (...) { NSLog(@"[MobileInk] Could not prepare a zoom tile"); return -1; }
+}
+
+bool installPreparedZoomTile(void* engine, void* snapshot) {
+    if (!engine || !snapshot) return false;
+    try { return static_cast<SkiaDrawingEngine*>(engine)->installPreparedStrokeTile(
+        *static_cast<StrokeTilePreparation*>(snapshot)); }
+    catch (...) { NSLog(@"[MobileInk] Could not install a zoom tile"); return false; }
+}
+
+bool hasPreparedZoomTiles(void* engine, void* snapshot) {
+    if (!engine || !snapshot) return false;
+    try { return static_cast<SkiaDrawingEngine*>(engine)->hasPreparedStrokeTiles(
+        *static_cast<StrokeTilePreparation*>(snapshot)); }
+    catch (...) { NSLog(@"[MobileInk] Could not check prepared zoom tiles"); return false; }
+}
+
+void releaseZoomTileSnapshot(void* snapshot) { delete static_cast<StrokeTilePreparation*>(snapshot); }
+
 void* snapshotEraserMasks(void* engine) {
     if (!engine) return nullptr;
     try { return static_cast<SkiaDrawingEngine*>(engine)->snapshotEraserMasks().release(); }

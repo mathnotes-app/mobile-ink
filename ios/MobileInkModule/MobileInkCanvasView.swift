@@ -74,7 +74,7 @@ class MobileInkCanvasView: MTKView {
     private static let eraserMaskQueue = DispatchQueue(label: "MobileInk.eraserMasks", qos: .utility)
     private static let imageCacheMemoryObserver = NotificationCenter.default.addObserver(
         forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil
-    ) { _ in clearDocumentImageCache(); clearEraserMaskCache() }
+    ) { _ in clearDocumentImageCache(); clearEraserMaskCache(); MobileInkZoomTileWorker.clear() }
     var drawingEngine: OpaquePointer?
     private var imageLayerRevision: UInt64 = 0
     private var imageLayerWork: ImageLayerWorkToken?
@@ -89,6 +89,70 @@ class MobileInkCanvasView: MTKView {
     private var eraserMaskScheduled: DispatchWorkItem?
     @objc var onImageLayersError: RCTDirectEventBlock?
     @objc var onImageLayersReady: RCTDirectEventBlock?
+    @objc var onZoomPreparationReady: RCTDirectEventBlock?
+    private var zoomPreparationRevision: UInt64 = 0
+    private var zoomPreparationInFlight = false
+    private var zoomPreparationScheduled: DispatchWorkItem?
+    @objc var zoomPreparationTarget: String? {
+        didSet {
+            guard oldValue != zoomPreparationTarget else { return }
+            zoomPreparationRevision &+= 1
+            scheduleZoomPreparation()
+        }
+    }
+
+    private func scheduleZoomPreparation() {
+        zoomPreparationScheduled?.cancel()
+        let revision = zoomPreparationRevision
+        let work = DispatchWorkItem { [weak self] in self?.startZoomPreparation(revision) }
+        zoomPreparationScheduled = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
+    }
+
+    private func startZoomPreparation(_ revision: UInt64) {
+        guard !isReleased, continuousDocument, useExperimentalGaneshBackend, hasPresentedFrame,
+              revision == zoomPreparationRevision, !zoomPreparationInFlight,
+              let engine = drawingEngine, let json = zoomPreparationTarget,
+              let data = json.data(using: .utf8),
+              let target = try? JSONSerialization.jsonObject(with: data) as? [String: Double],
+              let scale = target["renderScale"], let left = target["leftRatio"], let top = target["topRatio"],
+              let width = target["widthRatio"], let height = target["heightRatio"],
+              [scale, left, top, width, height].allSatisfy({ $0.isFinite }),
+              scale >= 0.25, scale <= 5, left >= 0, top >= 0, width > 0, height > 0,
+              left + width <= 1.000001, top + height <= 1.000001 else { return }
+        guard let snapshot = snapshotZoomTiles(engine, Float(scale), Float(left * Double(enginePixelWidth)),
+            Float(top * Double(enginePixelHeight)), Float(width * Double(enginePixelWidth)),
+            Float(height * Double(enginePixelHeight))) else { return }
+        if hasPreparedZoomTiles(engine, snapshot) {
+            releaseZoomTileSnapshot(snapshot)
+            onZoomPreparationReady?(["json": json])
+            return
+        }
+        zoomPreparationInFlight = true
+        advanceZoomPreparation(snapshot, revision: revision, json: json)
+    }
+
+    private func advanceZoomPreparation(_ snapshot: UnsafeMutableRawPointer, revision: UInt64, json: String) {
+        MobileInkZoomTileWorker.render(snapshot) { [weak self] result in
+            guard let self else { releaseZoomTileSnapshot(snapshot); return }
+            guard !self.isReleased, let engine = self.drawingEngine,
+                  revision == self.zoomPreparationRevision else {
+                releaseZoomTileSnapshot(snapshot)
+                self.zoomPreparationInFlight = false
+                if !self.isReleased { self.scheduleZoomPreparation() }
+                return
+            }
+            if result == 1 && installPreparedZoomTile(engine, snapshot) {
+                self.advanceZoomPreparation(snapshot, revision: revision, json: json)
+                return
+            }
+            let ready = result == 0 && hasPreparedZoomTiles(engine, snapshot)
+            releaseZoomTileSnapshot(snapshot)
+            self.zoomPreparationInFlight = false
+            if ready { self.onZoomPreparationReady?(["json": json]) }
+            else if result >= 0 { self.scheduleZoomPreparation() }
+        }
+    }
     @objc var documentImageLayersJSON: String? {
         didSet {
             guard oldValue != documentImageLayersJSON, !isReleased else { return }
