@@ -46,13 +46,11 @@ class MobileInkDocumentBridge(context: ReactApplicationContext) : ReactContextBa
                 number == kotlin.math.floor(number)) { "Invalid document stroke order range" }
             number.toLong()
         }
-        return Page(bytes, values, hasOrder)
+        return Page(LayerOrderMetadata.apply(root, bytes), values, hasOrder)
     }
 
     private fun encode(page: DocumentPageData, includeOrder: Boolean): String {
-        val pages = JSONObject()
-        if (page.bytes.isNotEmpty()) pages.put("0", Base64.encodeToString(page.bytes, Base64.NO_WRAP))
-        val root = JSONObject().put("pages", pages)
+        val root = LayerOrderMetadata.drawing(page.bytes)
         if (includeOrder) root.put("documentStrokeOrder", JSONArray().apply {
             page.order.forEach { put(it) }
         })

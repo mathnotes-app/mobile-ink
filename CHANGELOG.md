@@ -2,7 +2,11 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
-## [0.3.10] - 2026-10-19
+## [0.3.10] - 2026-11-01
+
+- Improve zoom previews, pen and crayon rendering, selection dragging, and pixel erasing in dense notebooks. iOS prepares sharp zoom tiles in the background and retains cached tiles across viewport changes.
+- Add display-only dark paper support and ordered image/ink composition on iOS. Android now preserves the layer-order metadata when opening, editing, and saving these documents.
+- Older app versions that do not understand layer-order metadata can open the ink, but may lose image/ink stacking order if they rewrite the note. Existing notes without recorded order keep their legacy ordering.
 
 - Prepare Ganesh contexts and common shader programs on a bounded background queue, then transfer ownership before the first native presentation. Keep loading UI responsive and preserve CPU fallback when preparation fails; closing a canvas settles pending native load callbacks.
 - Associate benchmark input samples with their encoded frame and recording session so delayed GPU completion callbacks cannot consume newer input or pollute a restarted recording.

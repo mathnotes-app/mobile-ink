@@ -1393,7 +1393,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
 
     fun deserializeDrawing(data: ByteArray): Boolean {
         val success = runOnGlThreadSync {
-            if (drawingEngine != 0L) { deserializeDrawing(drawingEngine, data); true } else false
+            if (drawingEngine != 0L) deserializeDrawing(drawingEngine, data) else false
         } ?: false
         if (success) {
             resetTransientInteractionState()
@@ -1521,7 +1521,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     private external fun snapshotDrawing(engine: Long): Long
     private external fun serializeDrawingSnapshot(snapshot: Long): ByteArray?
     private external fun freeDrawingSnapshot(snapshot: Long)
-    private external fun deserializeDrawing(engine: Long, data: ByteArray)
+    private external fun deserializeDrawing(engine: Long, data: ByteArray): Boolean
 
     // Rendering
     private external fun renderGaneshToCurrentSurface(engine: Long, width: Int, height: Int, dark: Boolean): Boolean

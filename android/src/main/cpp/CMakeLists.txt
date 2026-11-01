@@ -40,6 +40,7 @@ add_library(
     jni_bridge.cpp
     document_bridge.cpp
 )
+target_compile_definitions(mobileink PRIVATE MOBILE_INK_ANDROID_LAYER_TRAILER=1)
 
 # Link Skia library
 add_library(skia STATIC IMPORTED)

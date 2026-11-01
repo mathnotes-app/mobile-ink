@@ -871,21 +871,24 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_freeDrawingSnapshot(JNIEnv* env
     delete reinterpret_cast<std::vector<nativedrawing::Stroke>*>(snapshotPtr);
 }
 
-JNIEXPORT void JNICALL
+JNIEXPORT jboolean JNICALL
 Java_com_mathnotes_mobileink_MobileInkCanvasView_deserializeDrawing(
     JNIEnv* env, jobject obj, jlong contextPtr, jbyteArray data) {
 
     auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
     if (ctx && ctx->engine && data) {
-        jsize len = env->GetArrayLength(data);
-        jbyte* bytes = env->GetByteArrayElements(data, nullptr);
-
-        std::vector<uint8_t> vec(reinterpret_cast<uint8_t*>(bytes),
-                                  reinterpret_cast<uint8_t*>(bytes) + len);
-        ctx->engine->deserializeDrawing(vec);
-
-        env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
+        try {
+            const jsize len = env->GetArrayLength(data);
+            std::vector<uint8_t> bytes(static_cast<size_t>(len));
+            if (len) env->GetByteArrayRegion(data, 0, len, reinterpret_cast<jbyte*>(bytes.data()));
+            if (env->ExceptionCheck()) return JNI_FALSE;
+            return ctx->engine->deserializeDrawing(bytes) ? JNI_TRUE : JNI_FALSE;
+        } catch (...) {
+            LOGE("deserializeDrawing: unable to load drawing");
+            return JNI_FALSE;
+        }
     }
+    return JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL

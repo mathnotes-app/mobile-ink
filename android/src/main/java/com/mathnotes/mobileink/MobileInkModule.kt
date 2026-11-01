@@ -126,10 +126,7 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
                 try {
                     val data = view.serializeDrawing()
                     if (data != null && data.isNotEmpty()) {
-                        val base64 = Base64.encodeToString(data, Base64.NO_WRAP)
-                        // Wrap in JSON format like iOS: {"pages":{"0":"<base64>"}}
-                        val json = """{"pages":{"0":"$base64"}}"""
-                        promise.resolve(json)
+                        promise.resolve(LayerOrderMetadata.drawing(data).toString())
                     } else {
                         // Empty drawing - return empty JSON like iOS
                         promise.resolve("""{"pages":{}}""")
@@ -279,6 +276,7 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
                 val json = JSONObject(jsonString)
                 val pages = json.optJSONObject("pages")
                 if (pages == null) {
+                    LayerOrderMetadata.apply(json, byteArrayOf())
                     promise.resolve(view.clearCanvasForLoad())
                     return@runOnUiQueueThread
                 }
@@ -286,12 +284,13 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
                 // Get page 0 data (current page)
                 val base64 = pages.optString("0", "")
                 if (base64.isEmpty()) {
+                    LayerOrderMetadata.apply(json, byteArrayOf())
                     promise.resolve(view.clearCanvasForLoad())
                     return@runOnUiQueueThread
                 }
 
                 // Decode and load
-                val data = Base64.decode(base64, Base64.DEFAULT)
+                val data = LayerOrderMetadata.apply(json, Base64.decode(base64, Base64.DEFAULT))
 
                 // deserializeDrawing is now synchronous (waits for GL thread)
                 val success = view.deserializeDrawing(data)
@@ -334,8 +333,7 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
                 }
                 try {
                     val body = if (data != null && data.isNotEmpty()) {
-                        val base64 = Base64.encodeToString(data, Base64.NO_WRAP)
-                        """{"pages":{"0":"$base64"}}"""
+                        LayerOrderMetadata.drawing(data).toString()
                     } else {
                         """{"pages":{}}"""
                     }
@@ -400,17 +398,19 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
                     val json = JSONObject(body)
                     val pages = json.optJSONObject("pages")
                     if (pages == null) {
+                        LayerOrderMetadata.apply(json, byteArrayOf())
                         promise.resolve(view.clearCanvasForLoad())
                         return@runOnUiQueueThread
                     }
 
                     val base64 = pages.optString("0", "")
                     if (base64.isEmpty()) {
+                        LayerOrderMetadata.apply(json, byteArrayOf())
                         promise.resolve(view.clearCanvasForLoad())
                         return@runOnUiQueueThread
                     }
 
-                    val data = Base64.decode(base64, Base64.DEFAULT)
+                    val data = LayerOrderMetadata.apply(json, Base64.decode(base64, Base64.DEFAULT))
                     val success = view.deserializeDrawing(data)
                     promise.resolve(success)
                 } catch (e: Exception) {
