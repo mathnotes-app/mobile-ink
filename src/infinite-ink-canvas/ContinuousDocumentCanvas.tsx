@@ -1,5 +1,5 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { PixelRatio, StyleSheet, View } from 'react-native';
+import { PixelRatio, Platform, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NativeInkCanvas, type NativeInkCanvasRef } from '../NativeInkCanvas';
 import ZoomableInkViewport, { type ZoomableInkViewportRef, type TouchExclusionRect } from '../ZoomableInkViewport';
@@ -10,7 +10,7 @@ import { DEFAULT_CONTENT_PADDING, DEFAULT_PAGE_HEIGHT, DEFAULT_PAGE_WIDTH } from
 import { clonePage, getVisiblePageIndex, parseNotebookData } from './notebookPages';
 import { createBlankPage, BLANK_PAGE_PAYLOAD, pageHasContent, pageHasPdfBackground } from '../utils/pageGrowth';
 import { getRevealTranslateY, getRevealTargetScreenY } from '../utils/viewportTransform';
-import { resolveDocumentRenderTarget, type DocumentRenderTarget } from '../utils/documentRenderTarget';
+import { nextDocumentPrewarmTarget, resolveDocumentRenderTarget, type DocumentRenderTarget } from '../utils/documentRenderTarget';
 import { computeDataSignature } from '../utils/dataSignature';
 import { PageBackgrounds, PageBreaks } from './PageStack';
 import { selectionBoundsToTouchRect } from './selectionTouchRects';
@@ -84,6 +84,10 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
     [contentPadding, pageHeight, pageWidth]);
   const [renderTarget, setRenderTarget] = useState<DocumentRenderTarget>(
     () => resolveDocumentRenderTarget(null, null, renderLayout(), false));
+  const renderTargetRef = useRef(renderTarget);
+  renderTargetRef.current = renderTarget;
+  const [zoomPreparationTarget, setZoomPreparationTarget] = useState<(DocumentRenderTarget & { prefetch?: boolean }) | null>(null);
+  const prewarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectionRects, setSelectionRects] = useState<TouchExclusionRect[]>([]);
   const blockedTouchRects = useMemo(() => [...selectionRects, ...(props.blockedTouchRects ?? [])],
     [props.blockedTouchRects, selectionRects]);
@@ -225,6 +229,20 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
     setRenderTarget(previous => resolveDocumentRenderTarget(previous, transformRef.current, layout, isMoving.current));
   }, [renderLayout]);
   useEffect(updateRenderTarget, [pages.length, updateRenderTarget]);
+  const schedulePrewarm = useCallback(() => {
+    if (prewarmTimer.current) clearTimeout(prewarmTimer.current);
+    if (!inputReady || isMoving.current || Platform.OS !== 'ios' || props.renderBackend === 'cpu') return;
+    prewarmTimer.current = setTimeout(() => {
+      prewarmTimer.current = null;
+      if (isMoving.current) return;
+      const candidate = nextDocumentPrewarmTarget(renderTargetRef.current, transformRef.current, renderLayout());
+      if (candidate) setZoomPreparationTarget({ ...candidate, prefetch: true });
+    }, 700);
+  }, [inputReady, props.renderBackend, renderLayout]);
+  useEffect(() => {
+    if (!viewportMotionActive) schedulePrewarm();
+    return () => { if (prewarmTimer.current) clearTimeout(prewarmTimer.current); };
+  }, [viewportMotionActive, renderTarget, pages.length, schedulePrewarm]);
   const onMotionStateChange = useCallback((moving: boolean) => {
     isMoving.current = moving;
     setViewportMotionActive(moving);
@@ -234,13 +252,41 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
   const onTransform = useCallback((next: InfiniteInkViewportTransform) => {
     transformRef.current = next;
     updateRenderTarget();
+    if (isMoving.current && Platform.OS === 'ios' && props.renderBackend !== 'cpu') {
+      // Preparing the visible area plus a modest margin gets sharp pixels
+      // ready sooner while retaining room for small pans.
+      const layout = { ...renderLayout(), overscanFraction: 0.15 };
+      const target = resolveDocumentRenderTarget(null, next, layout, false);
+      // Lower-resolution tiles cannot improve a surface that is already
+      // sharper. Stop obsolete preparation as the pinch reverses.
+      if (target.renderScale > renderTargetRef.current.renderScale) {
+        setZoomPreparationTarget(previous => resolveDocumentRenderTarget(previous?.prefetch ? null : previous, next, layout, false));
+      } else {
+        setZoomPreparationTarget(null);
+      }
+    }
     const index = getVisiblePageIndex(next, pageHeight, pagesRef.current.length, contentPadding);
     if (index !== currentPage.current) {
       currentPage.current = index; setVisiblePage(index);
       callbacks.current.onCurrentPageChange?.(index);
     }
     callbacks.current.onTransformChange?.(next);
-  }, [contentPadding, pageHeight, updateRenderTarget]);
+  }, [contentPadding, pageHeight, props.renderBackend, renderLayout, updateRenderTarget]);
+  const onZoomPreparationReady = useCallback(({ nativeEvent }: { nativeEvent: { json: string } }) => {
+    let candidate: DocumentRenderTarget & { prefetch?: boolean };
+    try { candidate = JSON.parse(nativeEvent.json) as DocumentRenderTarget & { prefetch?: boolean }; }
+    catch { return; }
+    if (!candidate || [candidate.renderScale, candidate.leftRatio, candidate.topRatio,
+      candidate.widthRatio, candidate.heightRatio].some(value => typeof value !== 'number' || !Number.isFinite(value)) ||
+      candidate.renderScale <= 0 || candidate.leftRatio < 0 || candidate.topRatio < 0 ||
+      candidate.widthRatio <= 0 || candidate.heightRatio <= 0 ||
+      candidate.leftRatio + candidate.widthRatio > 1.000001 || candidate.topRatio + candidate.heightRatio > 1.000001) return;
+    if (candidate.prefetch && !isMoving.current) return;
+    const layout = renderLayout();
+    if (resolveDocumentRenderTarget(candidate, transformRef.current, layout, false) !== candidate) return;
+    setRenderTarget(previous => previous.renderScale >= candidate.renderScale &&
+      resolveDocumentRenderTarget(previous, transformRef.current, layout, true) === previous ? previous : candidate);
+  }, [renderLayout]);
   return <GestureHandlerRootView style={[styles.root, props.style, props.displayAppearance === 'dark' && { backgroundColor: '#171717' }]}>
     <ZoomableInkViewport ref={viewport} style={styles.viewport} minScale={props.minScale ?? 1} maxScale={props.maxScale ?? 5}
       contentWidth={pageWidth} contentHeight={documentHeight} contentPadding={contentPadding} isLandscape
@@ -264,10 +310,14 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
             renderBackend={props.renderBackend} renderScale={renderTarget.renderScale}
             renderViewportLeftRatio={renderTarget.leftRatio} renderViewportTopRatio={renderTarget.topRatio}
             renderViewportWidthRatio={renderTarget.widthRatio} renderViewportHeightRatio={renderTarget.heightRatio}
+            zoomPreparationTarget={zoomPreparationTarget ? JSON.stringify(zoomPreparationTarget) : undefined}
+            onZoomPreparationReady={onZoomPreparationReady}
             drawingPolicy={props.fingerDrawingEnabled ? 'anyinput' : 'pencilonly'} onCanvasReady={onReady}
             holdToShapeEnabled={props.holdToShapeEnabled}
             viewportMotionActive={viewportMotionActive}
             onDrawingBegin={event => {
+              if (prewarmTimer.current) clearTimeout(prewarmTimer.current);
+              setZoomPreparationTarget(null);
               revision.current++;
               drawingPage.current = Math.max(0, Math.min(pagesRef.current.length - 1, Math.floor(event.nativeEvent.y / pageHeight)));
               const last = pagesRef.current[pagesRef.current.length - 1];
@@ -281,6 +331,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
               if (patch !== undefined) {
                 callbacks.current.onExternalEdit?.(patch);
                 if (action) callbacks.current.onHistoryAction?.(action);
+                schedulePrewarm();
                 return;
               }
               revision.current++;
@@ -294,6 +345,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
               if (action) callbacks.current.onHistoryAction?.(action);
               const completedTool = event?.nativeEvent.completedStrokeTool;
               if (completedTool) callbacks.current.onStrokeEnd?.(completedTool);
+              schedulePrewarm();
             }}
             onSelectionChange={({ nativeEvent: { count, bounds } }) => {
               const touchRect = selectionBoundsToTouchRect({ bounds: bounds ?? null, pageIndex: 0, pageWidth, pageHeight,

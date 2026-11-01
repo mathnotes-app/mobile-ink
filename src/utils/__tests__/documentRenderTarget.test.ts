@@ -104,3 +104,18 @@ it('renders a four-page overview inside the native drawable cap', () => {
   expect(target.heightRatio * 132500 * target.renderScale * 2).toBeLessThanOrEqual(4000);
   expect(target.heightRatio * 132500).toBeGreaterThan(4000);
 });
+import { nextDocumentPrewarmTarget } from '../documentRenderTarget';
+
+it('prewarms only a bounded next zoom level for the visible document', () => {
+  const current = { renderScale: 1, leftRatio: 0, topRatio: 0, widthRatio: 1, heightRatio: 1 };
+  const layout = { pageWidth: 600, pageHeight: 1000, pageCount: 2, contentPadding: 0, pixelRatio: 2 };
+  const viewport = { scale: 1, translateX: 0, translateY: 0, containerWidth: 600, containerHeight: 800 };
+  const next = nextDocumentPrewarmTarget(current, viewport, layout);
+  expect(next?.renderScale).toBe(1.5);
+  expect(next?.heightRatio).toBeCloseTo(0.4);
+  expect(nextDocumentPrewarmTarget({ ...current, renderScale: 5 }, viewport, layout)).toBeNull();
+  expect(nextDocumentPrewarmTarget(current, viewport, { ...layout, pixelRatio: 10 })).toBeNull();
+  expect(nextDocumentPrewarmTarget(current, null, layout)).toBeNull();
+  const ipad = { scale: 1, translateX: 0, translateY: 0, containerWidth: 820, containerHeight: 1180 };
+  expect(nextDocumentPrewarmTarget(current, ipad, { ...layout, pageWidth: 820, pageHeight: 1061, pageCount: 4 })?.renderScale).toBe(1.5);
+});

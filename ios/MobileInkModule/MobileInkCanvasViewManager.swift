@@ -44,6 +44,12 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
   @objc var onImageLayersReady: RCTDirectEventBlock? {
     didSet { drawingView?.onImageLayersReady = onImageLayersReady }
   }
+  @objc var zoomPreparationTarget: String? {
+    didSet { drawingView?.zoomPreparationTarget = zoomPreparationTarget }
+  }
+  @objc var onZoomPreparationReady: RCTDirectEventBlock? {
+    didSet { drawingView?.onZoomPreparationReady = onZoomPreparationReady }
+  }
   @objc var onDrawingChange: RCTDirectEventBlock? {
     didSet {
       drawingView?.onDrawingChange = onDrawingChange
@@ -158,6 +164,8 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
     view.onImageLayersError = onImageLayersError
     view.onImageLayersReady = onImageLayersReady
     view.documentImageLayersJSON = documentImageLayersJSON
+    view.zoomPreparationTarget = zoomPreparationTarget
+    view.onZoomPreparationReady = onZoomPreparationReady
     view.darkDisplay = displayAppearance == "dark"
     // Forward any properties that were set before the drawing view was added
     if let handler = onDrawingChange {

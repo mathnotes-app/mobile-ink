@@ -2,6 +2,7 @@
 #include "DrawingSerialization.h"
 #include "EraserMaskOptimization.h"
 #include "PathRenderer.h"
+#include "StrokeTilePreparation.h"
 #import <Metal/Metal.h>
 #include "../cpp/SkiaDrawingEngine.h"
 #include "include/core/SkBBHFactory.h"
@@ -81,6 +82,77 @@ int main() {
     try {
         auto first = makeContext();
         auto second = makeContext();
+        // A background renderer must produce the same tiled image and must
+        // reject results if the live drawing changes during preparation.
+        {
+            SkiaDrawingEngine live(512, 512, true);
+            live.setBackgroundType("pdf");
+            live.setInkDisplayTransform(true, true);
+            live.setRenderViewport(1, 0, 0, 512, 512);
+            drawLine(live);
+            auto imageSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(8, 8));
+            imageSurface->getCanvas()->clear(SK_ColorRED);
+            nativedrawing::ImageLayer image;
+            image.id = "tile-preparation";
+            image.layerOrder = live.reserveLayerOrder();
+            image.image = imageSurface->makeImageSnapshot();
+            image.bounds = SkRect::MakeXYWH(100, 70, 160, 90);
+            live.setImageLayers({image});
+            live.setToolWithParams("crayon", 24, 0xff0000ff, "pixel");
+            live.touchBegan(50, 110, .7);
+            for (int x = 55; x < 400; x += 5) live.touchMoved(x, 110, .7);
+            live.touchEnded();
+            live.setToolWithParams("pen", 10, 0xff000000, "pixel");
+            live.touchBegan(40, 400, 1); live.touchMoved(400, 400, 1); live.touchEnded();
+            renderCrop(live, first.get(), 512, 512);
+            auto batch = live.prepareStrokeTiles(2, 0, 0, 250, 250);
+            if (!batch) throw std::runtime_error("Could not prepare zoom tiles");
+            if (batch->drawing->snapshotDrawing().size() != 2)
+                throw std::runtime_error("Prepared snapshot included offscreen ink");
+            auto worker = SkSurfaces::RenderTarget(second.get(), skgpu::Budgeted::kYes,
+                SkImageInfo::MakeN32Premul(512, 512));
+            if (!worker) throw std::runtime_error("Could not allocate worker target");
+            int tileResult;
+            while ((tileResult = SkiaDrawingEngine::renderPreparedStrokeTile(*batch, worker->getCanvas(), second.get())) == 1) {
+                if (!live.installPreparedStrokeTile(*batch)) throw std::runtime_error("Fresh tile rejected");
+            }
+            if (tileResult != 0 || !live.hasPreparedStrokeTiles(*batch))
+                throw std::runtime_error("Prepared zoom is incomplete");
+            auto copy = live.snapshotDrawing();
+            SkiaDrawingEngine fresh(512, 512, true);
+            fresh.setBackgroundType("pdf");
+            fresh.setInkDisplayTransform(true, true);
+            fresh.replaceDrawing(copy);
+            fresh.setImageLayers({image});
+            fresh.setRenderViewport(2, 0, 0, 250, 250);
+            live.setRenderViewport(2, 0, 0, 250, 250);
+            auto actual = renderCrop(live, first.get(), 500, 500);
+            auto expected = renderCrop(fresh, first.get(), 500, 500);
+            for (int y = 0; y < 500; ++y) for (int x = 0; x < 500; ++x)
+                if (actual.getColor(x, y) != expected.getColor(x, y))
+                    throw std::runtime_error("Prepared tile changed zoom pixels");
+            auto stale = live.prepareStrokeTiles(3, 0, 0, 170, 170);
+            if (!stale || SkiaDrawingEngine::renderPreparedStrokeTile(*stale, worker->getCanvas(), second.get()) != 1)
+                throw std::runtime_error("Could not prepare stale-tile test");
+            live.setToolWithParams("eraser", 24, 0xff000000, "pixel");
+            live.touchBegan(120, 100, 1); live.touchMoved(150, 100, 1); live.touchEnded();
+            if (live.installPreparedStrokeTile(*stale)) throw std::runtime_error("Installed stale erased ink");
+            if (live.hasPreparedStrokeTiles(*batch)) throw std::runtime_error("Retained readiness after erasing");
+            auto imageStale = live.prepareStrokeTiles(3, 0, 0, 170, 170);
+            if (!imageStale || SkiaDrawingEngine::renderPreparedStrokeTile(*imageStale, worker->getCanvas(), second.get()) != 1)
+                throw std::runtime_error("Could not prepare stale-image test");
+            live.setImageLayers({});
+            if (live.installPreparedStrokeTile(*imageStale)) throw std::runtime_error("Installed a stale image layer");
+            auto appendedStale = live.prepareStrokeTiles(3, 0, 0, 170, 170);
+            if (!appendedStale || SkiaDrawingEngine::renderPreparedStrokeTile(*appendedStale, worker->getCanvas(), second.get()) != 1)
+                throw std::runtime_error("Could not prepare stale-append test");
+            SkiaDrawingEngine other(512, 512, true);
+            other.setRenderViewport(1, 0, 0, 512, 512);
+            renderCrop(other, first.get(), 512, 512);
+            if (other.installPreparedStrokeTile(*appendedStale)) throw std::runtime_error("Installed another engine's tile");
+            drawLine(live);
+            if (live.installPreparedStrokeTile(*appendedStale)) throw std::runtime_error("Installed a tile missing new ink");
+        }
         // A fast erase arrives as widely spaced input points. Its live and
         // committed edges must remain straight, including between samples.
         for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {

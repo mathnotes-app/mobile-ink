@@ -7,6 +7,7 @@
 #include "cpp/DisplayAppearance.h"
 #include "cpp/PathRenderer.h"
 #include "cpp/EraserMaskOptimization.h"
+#include "cpp/StrokeTilePreparation.h"
 
 // Additional Skia includes for batch export PDF handling
 // Note: SkImages namespace functions are in SkImage.h
@@ -22,6 +23,7 @@
 #pragma clang diagnostic ignored "-Wdocumentation"
 #include <include/gpu/ganesh/GrBackendSurface.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
+#include <include/gpu/ganesh/SkImageGanesh.h>
 #include <include/gpu/ganesh/SkSurfaceGanesh.h>
 #include <include/gpu/ganesh/mtl/GrMtlBackendContext.h>
 #include <include/gpu/ganesh/mtl/GrMtlBackendSurface.h>
@@ -226,6 +228,83 @@ using namespace nativedrawing;
 
 // C wrapper functions for Swift
 extern "C" {
+void* snapshotZoomTiles(void* engine, float scale, float left, float top, float width, float height) {
+    if (!engine) return nullptr;
+    try { return static_cast<SkiaDrawingEngine*>(engine)->prepareStrokeTiles(scale, left, top, width, height).release(); }
+    catch (...) { NSLog(@"[MobileInk] Could not snapshot zoom tiles"); return nullptr; }
+}
+
+void limitZoomTileContext(void* contextPtr) {
+    if (!contextPtr) return;
+    auto* context = static_cast<sk_sp<GrDirectContext>*>(contextPtr)->get();
+    if (context) context->setResourceCacheLimit(32 * 1024 * 1024);
+}
+
+int prepareNextZoomTile(void* snapshot, void* contextPtr, void* devicePtr, void** outputTexture) {
+    if (!snapshot || !contextPtr || !devicePtr || !outputTexture) return -1;
+    *outputTexture = nullptr;
+    try {
+        auto* context = static_cast<sk_sp<GrDirectContext>*>(contextPtr)->get();
+        auto surface = context ? SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes,
+            SkImageInfo::MakeN32Premul(1, 1)) : nullptr;
+        if (!surface) return -1;
+        auto& batch = *static_cast<StrokeTilePreparation*>(snapshot);
+        sk_sp<SkImage> tile;
+        const int result = SkiaDrawingEngine::renderPreparedStrokeTileImage(batch, surface->getCanvas(), tile);
+        if (result != 1) return result;
+        id<MTLDevice> device = (__bridge id<MTLDevice>)devicePtr;
+        auto descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+            width:batch.ready.width height:batch.ready.height mipmapped:NO];
+        descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        descriptor.storageMode = MTLStorageModePrivate;
+        id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
+        if (!texture) return -1;
+        GrMtlTextureInfo info; info.fTexture.retain((__bridge void*)texture);
+        auto target = GrBackendRenderTargets::MakeMtl(batch.ready.width, batch.ready.height, info);
+        auto destination = SkSurfaces::WrapBackendRenderTarget(context, target, kTopLeft_GrSurfaceOrigin,
+            kBGRA_8888_SkColorType, nullptr, nullptr);
+        if (!destination) return -1;
+        SkPaint copy; copy.setBlendMode(SkBlendMode::kSrc);
+        destination->getCanvas()->drawImage(tile, 0, 0, SkSamplingOptions(), &copy);
+        context->flushAndSubmit(destination.get(), GrSyncCpu::kYes);
+        *outputTexture = (__bridge_retained void*)texture;
+        return 1;
+    } catch (...) { NSLog(@"[MobileInk] Could not prepare a zoom tile"); return -1; }
+}
+
+void releaseZoomTileTexture(void* texture) { if (texture) CFRelease(texture); }
+
+bool installPreparedZoomTile(void* engine, void* snapshot, void* contextPtr, void* texturePtr) {
+    if (!texturePtr) return false;
+    id<MTLTexture> texture = (__bridge_transfer id<MTLTexture>)texturePtr;
+    if (!engine || !snapshot || !contextPtr) return false;
+    try {
+        auto& batch = *static_cast<StrokeTilePreparation*>(snapshot);
+        auto* context = static_cast<sk_sp<GrDirectContext>*>(contextPtr)->get();
+        if (!context || batch.context != context || texture.width != batch.ready.width || texture.height != batch.ready.height) return false;
+        GrMtlTextureInfo info; info.fTexture.retain((__bridge void*)texture);
+        auto backend = GrBackendTextures::MakeMtl(batch.ready.width, batch.ready.height, skgpu::Mipmapped::kNo, info);
+        void* lease = (__bridge_retained void*)texture;
+        auto release = [](void* p) { if (p) CFRelease(p); };
+        batch.pixels = SkImages::BorrowTextureFrom(context, backend, kTopLeft_GrSurfaceOrigin,
+            kBGRA_8888_SkColorType, kPremul_SkAlphaType, nullptr, release, lease);
+        if (!batch.pixels) return false;
+        const bool installed = static_cast<SkiaDrawingEngine*>(engine)->installPreparedStrokeTile(batch);
+        if (!installed) batch.pixels.reset();
+        return installed;
+    }
+    catch (...) { NSLog(@"[MobileInk] Could not install a zoom tile"); return false; }
+}
+
+bool hasPreparedZoomTiles(void* engine, void* snapshot) {
+    if (!engine || !snapshot) return false;
+    try { return static_cast<SkiaDrawingEngine*>(engine)->hasPreparedStrokeTiles(
+        *static_cast<StrokeTilePreparation*>(snapshot)); }
+    catch (...) { NSLog(@"[MobileInk] Could not check prepared zoom tiles"); return false; }
+}
+
+void releaseZoomTileSnapshot(void* snapshot) { delete static_cast<StrokeTilePreparation*>(snapshot); }
+
 void* snapshotEraserMasks(void* engine) {
     if (!engine) return nullptr;
     try { return static_cast<SkiaDrawingEngine*>(engine)->snapshotEraserMasks().release(); }

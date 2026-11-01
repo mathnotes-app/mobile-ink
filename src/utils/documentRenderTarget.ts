@@ -21,10 +21,38 @@ export type DocumentRenderLayout = {
   pixelRatio?: number;
   /** Highest native render scale; defaults to MAX_NATIVE_RENDER_SCALE. */
   maxRenderScale?: number;
+  /** Fraction of the visible span to include beyond each edge. */
+  overscanFraction?: number;
 };
 
 /** Native engines clamp render scale to this (kMaximumRenderScale in C++). */
 export const MAX_NATIVE_RENDER_SCALE = 5;
+
+/** Prepare the next resolution for the current visible area while idle. */
+export function nextDocumentPrewarmTarget(
+  current: DocumentRenderTarget, transform: ViewportTransformLike | null, layout: DocumentRenderLayout,
+): DocumentRenderTarget | null {
+  if (!transform || !Number.isFinite(transform.scale) || transform.scale <= 0) return null;
+  const scale = [0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5]
+    .find(value => value > current.renderScale + 0.001 && value <= (layout.maxRenderScale ?? MAX_NATIVE_RENDER_SCALE));
+  if (scale === undefined) return null;
+  const visible = getDocumentRenderViewport(transform, layout.pageWidth, layout.pageHeight,
+    layout.pageCount, layout.contentPadding);
+  const ratio = layout.pixelRatio ?? PixelRatio.get();
+  if (!Number.isFinite(ratio) || ratio <= 0 ||
+      visible.widthRatio * layout.pageWidth * ratio * scale > 4000 ||
+      visible.heightRatio * layout.pageHeight * layout.pageCount * ratio * scale > 4000) return null;
+  // Leave at least half of the native 96 MB tile cache for the displayed
+  // surface. Account for tile alignment and the native two-pixel guard.
+  const tileCount = (start: number, size: number) =>
+    Math.ceil((start + size + 2) / 512) - Math.floor(Math.max(0, start - 2) / 512);
+  const width = layout.pageWidth * ratio * scale;
+  const height = layout.pageHeight * layout.pageCount * ratio * scale;
+  const tiles = tileCount(visible.leftRatio * width, visible.widthRatio * width) *
+    tileCount(visible.topRatio * height, visible.heightRatio * height);
+  if (tiles * 512 * 512 * 4 > 48 * 1024 * 1024) return null;
+  return { ...visible, renderScale: scale };
+}
 
 // Native iOS caps a continuous drawable at 4096 px per side; stay below it so
 // the native clamp never truncates the overscan asymmetrically.
@@ -54,9 +82,9 @@ const fitsPixelCap = (rect: Rect, scale: number, pixelRatio: number) => {
 };
 
 /** Grow a visible span by the overscan, capped and clamped to [0, extent]. */
-const expandSpan = (start: number, end: number, extent: number, limit: number): [number, number] => {
+const expandSpan = (start: number, end: number, extent: number, limit: number, overscan: number): [number, number] => {
   const size = end - start;
-  const desired = Math.max(size, Math.min(limit, size * (1 + 2 * OVERSCAN_FRACTION)));
+  const desired = Math.max(size, Math.min(limit, size * (1 + 2 * overscan)));
   const length = Math.min(extent, desired);
   const center = (start + end) / 2;
   const from = Math.max(0, Math.min(extent - length, center - length / 2));
@@ -88,6 +116,8 @@ export function resolveDocumentRenderTarget(
   const requestedRatio = layout.pixelRatio ?? PixelRatio.get();
   const pixelRatio = Math.max(1, Number.isFinite(requestedRatio) ? requestedRatio : 1);
   const maxRenderScale = layout.maxRenderScale ?? MAX_NATIVE_RENDER_SCALE;
+  const overscan = Math.max(0, Math.min(OVERSCAN_FRACTION,
+    finite(layout.overscanFraction ?? OVERSCAN_FRACTION, OVERSCAN_FRACTION)));
   const visible = toRect(getDocumentRenderViewport(transform, pageWidth, pageHeight,
     pageCount, contentPadding), width, height);
   // Prefer the nearest bucket for crisp settled ink; the lower bucket always
@@ -118,8 +148,8 @@ export function resolveDocumentRenderTarget(
   }
 
   const limit = MAX_TARGET_SIDE_PIXELS / (pixelRatio * scale);
-  const [left, right] = expandSpan(visible.left, visible.right, width, limit);
-  const [top, bottom] = expandSpan(visible.top, visible.bottom, height, limit);
+  const [left, right] = expandSpan(visible.left, visible.right, width, limit, overscan);
+  const [top, bottom] = expandSpan(visible.top, visible.bottom, height, limit, overscan);
   return {
     renderScale: scale,
     leftRatio: left / width,

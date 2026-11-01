@@ -15,6 +15,11 @@ void renderToDisplayCanvas(void*, void*, bool, bool);
 void* createSkiaCanvas(void*, int, int, int);
 void renderVisibleViewportToCanvas(void*, void*);
 void destroySkiaCanvas(void*);
+void* snapshotZoomTiles(void*, float, float, float, float, float);
+int prepareNextZoomTile(void*, void*, void*, void**);
+bool installPreparedZoomTile(void*, void*, void*, void*);
+bool hasPreparedZoomTiles(void*, void*);
+void releaseZoomTileSnapshot(void*);
 }
 
 int main() {
@@ -40,6 +45,72 @@ int main() {
         const auto preparationMs = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - start).count();
         bool matches = true;
+        {
+            // Exercise the production GPU handoff across two contexts, then
+            // destroy the producer before consuming the imported texture.
+            id<MTLCommandQueue> workerQueue = [device newCommandQueue];
+            void* workerContext = createGaneshMetalContext((__bridge void*)device, (__bridge void*)workerQueue);
+            if (!workerContext) return 1;
+            nativedrawing::SkiaDrawingEngine live(512, 512, true), fresh(512, 512, true);
+            auto photo = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(32, 32));
+            photo->getCanvas()->clear(SK_ColorRED);
+            nativedrawing::ImageLayer layer;
+            layer.id = "photo"; layer.image = photo->makeImageSnapshot();
+            layer.bounds = SkRect::MakeXYWH(80, 80, 120, 120); layer.layerOrder = 2;
+            for (auto* drawing : {&live, &fresh}) {
+                drawing->setBackgroundType("pdf");
+                drawing->setImageLayers({layer});
+                drawing->setToolWithParams("crayon", 18, 0xff0033cc, "pixel");
+                drawing->touchBegan(30, 120, .7f);
+                for (int x = 35; x < 240; x += 5) drawing->touchMoved(x, 120, .7f);
+                drawing->touchEnded();
+                drawing->setToolWithParams("eraser", 16, 0xff000000, "pixel");
+                drawing->touchBegan(120, 100, 1); drawing->touchMoved(120, 140, 1); drawing->touchEnded();
+                drawing->setRenderViewport(1, 0, 0, 256, 256);
+            }
+            auto smallDesc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:256 height:256 mipmapped:NO];
+            smallDesc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+            id<MTLTexture> small = [device newTextureWithDescriptor:smallDesc];
+            if (!renderToGaneshMetalTexture(&live, context, (__bridge void*)small, 256, 256, true) ||
+                !renderToGaneshMetalTexture(&fresh, context, (__bridge void*)small, 256, 256, true)) return 1;
+            void* batch = snapshotZoomTiles(&live, 2, 0, 0, 256, 256);
+            if (!batch) return 1;
+            void* tile = nullptr;
+            int tileResult;
+            while ((tileResult = prepareNextZoomTile(batch, workerContext, (__bridge void*)device, &tile)) == 1) {
+                if (!tile || !installPreparedZoomTile(&live, batch, context, tile)) return 1;
+            }
+            if (tileResult != 0 || !hasPreparedZoomTiles(&live, batch)) return 1;
+            destroyGaneshMetalContext(workerContext);
+            releaseZoomTileSnapshot(batch);
+            auto desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:512 height:512 mipmapped:NO];
+            desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+            desc.storageMode = MTLStorageModeShared;
+            id<MTLTexture> target = [device newTextureWithDescriptor:desc];
+            std::vector<uint8_t> actual(512 * 512 * 4), expected(actual.size());
+            for (auto* drawing : {&live, &fresh}) {
+                drawing->setRenderViewport(2, 0, 0, 256, 256);
+                if (!renderToGaneshMetalTexture(drawing, context, (__bridge void*)target, 512, 512, true)) return 1;
+                id<MTLCommandBuffer> barrier = [queue commandBuffer]; [barrier commit]; [barrier waitUntilCompleted];
+                auto& pixels = drawing == &live ? actual : expected;
+                [target getBytes:pixels.data() bytesPerRow:512 * 4 fromRegion:MTLRegionMake2D(0, 0, 512, 512) mipmapLevel:0];
+            }
+            if (actual != expected) {
+                std::cerr << "Cross-context prepared tile changed image, eraser, or crayon pixels\n";
+                return 1;
+            }
+            workerContext = createGaneshMetalContext((__bridge void*)device, (__bridge void*)workerQueue);
+            batch = snapshotZoomTiles(&live, 3, 0, 0, 150, 150);
+            if (!workerContext || !batch || prepareNextZoomTile(batch, workerContext, (__bridge void*)device, &tile) != 1 || !tile) return 1;
+            live.setToolWithParams("pen", 8, 0xff000000, "pixel");
+            live.touchBegan(20, 20, 1); live.touchMoved(80, 20, 1); live.touchEnded();
+            if (installPreparedZoomTile(&live, batch, context, tile)) {
+                std::cerr << "Installed a GPU tile after the note changed\n";
+                return 1;
+            }
+            releaseZoomTileSnapshot(batch);
+            destroyGaneshMetalContext(workerContext);
+        }
         {
             nativedrawing::SkiaDrawingEngine drawing(256, 256, true);
             drawing.setBackgroundType("pdf");

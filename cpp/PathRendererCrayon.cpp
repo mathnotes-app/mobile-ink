@@ -502,6 +502,19 @@ void PathRenderer::clearShaderCache() {
     shaderCache_.clear();
 }
 
+void PathRenderer::inheritShaderCacheFrom(const PathRenderer& other) {
+    shaderCache_ = other.shaderCache_;
+}
+
+bool PathRenderer::mergeShaderCacheFrom(const PathRenderer& other) {
+    for (const auto& [key, shader] : other.shaderCache_) {
+        auto found = shaderCache_.find(key);
+        if (found != shaderCache_.end() && found->second.get() != shader.get()) return false;
+    }
+    for (const auto& [key, shader] : other.shaderCache_) shaderCache_.emplace(key, shader);
+    return true;
+}
+
 IncrementalResult PathRenderer::drawCrayonPathIncremental(
     SkCanvas* canvas,
     const std::vector<Point>& points,

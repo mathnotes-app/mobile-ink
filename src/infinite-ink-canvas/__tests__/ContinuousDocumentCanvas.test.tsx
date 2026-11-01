@@ -60,6 +60,60 @@ it('uses cached ink during movement and requests full quality after it settles',
   expect(mockProps.viewportMotionActive).toBe(false);
   tree.unmount();
 });
+it('uses a prepared sharp target during a pinch only while it still covers the current zoom', async () => {
+  const { tree } = await setup();
+  const transform = (scale: number) => ({ scale, translateX: 0, translateY: 0, containerWidth: 600, containerHeight: 800 });
+  act(() => { mockViewportProps.onMotionStateChange(true); mockViewportProps.onTransformChange(transform(2)); });
+  const prepared = mockProps.zoomPreparationTarget;
+  expect(JSON.parse(prepared).renderScale).toBe(2);
+  expect(mockProps.renderScale).toBe(1);
+  act(() => mockProps.onZoomPreparationReady({ nativeEvent: { json: prepared } }));
+  expect(mockProps.renderScale).toBe(2);
+  act(() => mockViewportProps.onTransformChange(transform(3)));
+  expect(JSON.parse(mockProps.zoomPreparationTarget).renderScale).toBe(3);
+  act(() => mockProps.onZoomPreparationReady({ nativeEvent: { json: prepared } }));
+  expect(mockProps.renderScale).toBe(2);
+  act(() => mockProps.onZoomPreparationReady({ nativeEvent: { json: '{"renderScale":3}' } }));
+  expect(mockProps.renderScale).toBe(2);
+  act(() => mockViewportProps.onTransformChange(transform(1)));
+  expect(mockProps.zoomPreparationTarget).toBeUndefined();
+  act(() => mockProps.onZoomPreparationReady({ nativeEvent: { json: prepared } }));
+  expect(mockProps.renderScale).toBe(2);
+  tree.unmount();
+});
+it('does not schedule Metal zoom preparation for the CPU renderer', async () => {
+  const tree = render(<ContinuousDocumentCanvas initialData={data} renderBackend="cpu"
+    toolState={{ toolType: 'pen', width: 2, color: '#000000', eraserMode: 'pixel' }} />);
+  await act(async () => {});
+  act(() => { mockViewportProps.onMotionStateChange(true); mockViewportProps.onTransformChange({ scale: 2,
+    translateX: 0, translateY: 0, containerWidth: 600, containerHeight: 800 }); });
+  expect(mockProps.zoomPreparationTarget).toBeUndefined();
+  tree.unmount();
+});
+it('prewarms the next zoom level without changing the displayed surface while idle', async () => {
+  jest.useFakeTimers();
+  try {
+    const { tree } = await setup();
+    act(() => mockViewportProps.onTransformChange({ scale: 1, translateX: 0, translateY: 0,
+      containerWidth: 600, containerHeight: 800 }));
+    act(() => jest.advanceTimersByTime(700));
+    const prepared = mockProps.zoomPreparationTarget;
+    expect(JSON.parse(prepared)).toMatchObject({ renderScale: 1.5, prefetch: true });
+    act(() => mockProps.onZoomPreparationReady({ nativeEvent: { json: prepared } }));
+    expect(mockProps.renderScale).toBe(1);
+    act(() => mockProps.onDrawingBegin({ nativeEvent: { y: 100 } }));
+    expect(mockProps.zoomPreparationTarget).toBeUndefined();
+    act(() => jest.advanceTimersByTime(1000));
+    expect(mockProps.zoomPreparationTarget).toBeUndefined();
+    act(() => mockProps.onDrawingChange({ nativeEvent: { completedStrokeTool: 'pen' } }));
+    act(() => jest.advanceTimersByTime(700));
+    expect(JSON.parse(mockProps.zoomPreparationTarget)).toMatchObject({ prefetch: true });
+    act(() => { mockViewportProps.onMotionStateChange(true); mockViewportProps.onTransformChange({ scale: 1.5,
+      translateX: 0, translateY: 0, containerWidth: 600, containerHeight: 800 }); });
+    expect(JSON.parse(mockProps.zoomPreparationTarget)).not.toHaveProperty('prefetch');
+    tree.unmount();
+  } finally { jest.useRealTimers(); }
+});
 it('keeps overlays below ink while drawing and makes them selectable with the lasso', async () => {
   const tool = {toolType: 'pen' as const, width: 2, color: '#000000', eraserMode: 'pixel' as const};
   const tree = render(<ContinuousDocumentCanvas initialData={data} toolState={tool} />);
