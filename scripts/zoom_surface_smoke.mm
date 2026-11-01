@@ -488,6 +488,52 @@ int main() {
                 throw std::runtime_error("Ink export background is not transparent");
             expectInk(pixels, 100, 100, true, "Ink export did not retain the stroke");
         }
+        // A predicted Pencil path is temporary. It must never become part of
+        // the cached live stroke after a new actual sample replaces it.
+        for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
+            SkiaDrawingEngine pen(512, 512, true);
+            pen.setBackgroundType("pdf");
+            pen.setRenderViewport(1, 0, 0, 512, 512);
+            pen.setToolWithParams("pen", 12, 0xff000000, "pixel");
+            pen.touchBegan(40, 100, 1, 0, 1.57, 0, true);
+            pen.touchMoved(60, 100, 1, 0, 1.57, 1, true);
+            for (int i = 1; i <= 8; ++i)
+                pen.addPredictedPoint(60 + 10 * i, 100 + 12 * i, 1, 0, 1.57, i + 1, true);
+            (void)renderCrop(pen, context, 512, 512);
+            pen.clearPredictedPoints();
+            for (int x = 70; x <= 180; x += 10)
+                pen.touchMoved(x, 100, 1, 0, 1.57, x, true);
+            auto corrected = renderCrop(pen, context, 512, 512);
+            for (int y = 135; y < 220; ++y) for (int x = 60; x < 180; ++x) {
+                if (SkColorGetA(corrected.getColor(x, y)) > 0)
+                    throw std::runtime_error("Replaced Pencil predictions left ink in the live stroke");
+            }
+            pen.touchEnded();
+        }
+        // Repeated preview updates must not create spikes far outside the
+        // same live geometry rendered all at once.
+        {
+            SkiaDrawingEngine incremental(512, 512, true), single(512, 512, true);
+            for (auto* engine : {&incremental, &single}) {
+                engine->setBackgroundType("pdf");
+                engine->setRenderViewport(1, 0, 0, 512, 512);
+                engine->setToolWithParams("pen", 16, 0xff000000, "pixel");
+                engine->touchBegan(40, 150, 1, 0, 1.57, 0, true);
+            }
+            for (int i = 1; i <= 80; ++i) {
+                const float x = 40 + i * 5;
+                const float y = 150 + 25 * std::sin(i * .35);
+                incremental.touchMoved(x, y, 1, 0, 1.57, i, true);
+                single.touchMoved(x, y, 1, 0, 1.57, i, true);
+                (void)renderCrop(incremental, nullptr, 512, 512);
+            }
+            auto actual = renderCrop(incremental, nullptr, 512, 512);
+            auto expected = renderCrop(single, nullptr, 512, 512);
+            int extra = 0;
+            for (int y = 100; y < 200; ++y) for (int x = 25; x < 460; ++x)
+                if (SkColorGetA(actual.getColor(x, y)) > 180 && SkColorGetA(expected.getColor(x, y)) < 30) ++extra;
+            if (extra > 150) throw std::runtime_error("Incremental pen preview added spikes outside the stroke");
+        }
         // First use must allocate the live-stroke cache; a following stroke
         // must clear its old snapshot without removing committed ink.
         SkiaDrawingEngine live(512, 512);

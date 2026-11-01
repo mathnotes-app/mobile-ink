@@ -55,6 +55,14 @@ describe('continuous document render target', () => {
     expect(out.renderScale).toBe(1);
   });
 
+  it('reuses a sharp surface after a small zoom-out when it still covers the screen', () => {
+    const sharp = resolveDocumentRenderTarget(null, at(-10000, 2), layout, false);
+    const zoomedOut = resolveDocumentRenderTarget(sharp, at(-7500, 1.5), layout, false);
+    expect(zoomedOut).toBe(sharp);
+    const backIn = resolveDocumentRenderTarget(zoomedOut, at(-10000, 2), layout, true);
+    expect(backIn).toBe(sharp);
+  });
+
   it('never exceeds the native per-side pixel cap and stays inside the document', () => {
     for (const [translateY, scale] of [[0, 1], [-1e6, 1], [1e6, 3], [-50000, 5]] as const) {
       const target = resolveDocumentRenderTarget(null, at(translateY, scale), layout, false);

@@ -119,7 +119,8 @@ void ActiveStrokeRenderer::renderIncremental(
     const std::vector<Point>& points,
     const SkPaint& paint,
     const std::string& toolType,
-    const ActiveStrokeViewport& viewport
+    const ActiveStrokeViewport& viewport,
+    size_t predictedPointCount
 ) {
     if (!canvas) return;
     ensureViewportAlignment(viewport, canvas);
@@ -133,8 +134,11 @@ void ActiveStrokeRenderer::renderIncremental(
     }
 
     // Spline overlap: Catmull-Rom needs p[i-1], p[i], p[i+1], p[i+2]
-    // We can only "finalize" points up to points.size() - 2
-    size_t renderableUpTo = (points.size() > OVERLAP) ? points.size() - OVERLAP : 0;
+    // Predictions can be withdrawn on the next Pencil sample, so never bake
+    // them into the cached surface. Only the temporary tail may include them.
+    // Catmull-Rom also needs two actual points beyond the finalized segment.
+    const size_t actualCount = points.size() - std::min(points.size(), predictedPointCount);
+    size_t renderableUpTo = (actualCount > OVERLAP) ? actualCount - OVERLAP : 0;
 
     // Render new points to the cached surface
     if (renderableUpTo > lastRenderedInputIndex_ && renderableUpTo >= 2) {

@@ -263,7 +263,8 @@ void SkiaDrawingEngine::renderActiveContent(SkCanvas* canvas) {
                 currentPoints_,
                 displayInkPaint(currentPaint_),
                 currentTool_,
-                viewport
+                viewport,
+                predictedPointCount_
             );
         }
     }
@@ -339,7 +340,7 @@ void SkiaDrawingEngine::render(SkCanvas* canvas) {
             if (viewportOnly_ && isDraggingSelection_) {
                 canvas->translate(selectionOffsetX_, selectionOffsetY_);
             }
-            selection_->renderSelection(canvas, strokes_, selectedIndices_);
+            selection_->renderSelection(canvas, strokes_, selectedIndices_, displayInkSwap_);
         }
         canvas->restore();
         return;
@@ -492,7 +493,7 @@ void SkiaDrawingEngine::render(SkCanvas* canvas) {
         // During drag, use cached highlight with offset - O(1)
         canvas->drawImage(selectionHighlightSnapshot_, selectionOffsetX_, selectionOffsetY_);
     } else {
-        selection_->renderSelection(canvas, strokes_, selectedIndices_);
+        selection_->renderSelection(canvas, strokes_, selectedIndices_, displayInkSwap_);
     }
 }
 

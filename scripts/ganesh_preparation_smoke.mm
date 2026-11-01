@@ -143,6 +143,47 @@ int main() {
                     }
                 }
             }
+            // Selection handles are UI chrome, not authored ink. They must
+            // stay blue in both appearances, with and without image layers.
+            auto neutralImage = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(8, 8));
+            neutralImage->getCanvas()->clear(SK_ColorWHITE);
+            layer.image = neutralImage->makeImageSnapshot();
+            layer.hidden = false;
+            for (bool hasImage : {false, true}) {
+                drawing.clear();
+                drawing.setImageLayers(hasImage ? std::vector<nativedrawing::ImageLayer>{layer}
+                                                : std::vector<nativedrawing::ImageLayer>{});
+                drawing.setToolWithParams("pen", 16, 0xFF000000u, "pixel");
+                drawing.touchBegan(24, 80, 1);
+                for (int x = 32; x <= 232; x += 8) drawing.touchMoved(x, 80, 1);
+                drawing.touchEnded();
+                drawing.setToolWithParams("select", 1, 0xFF000000u, "pixel");
+                if (!drawing.selectStrokeAt(100, 80)) return 1;
+                for (bool dark : {false, true}) {
+                    if (!renderToGaneshMetalTextureForDisplay(&drawing, context, (__bridge void*)texture, 256, 256, true, dark)) return 1;
+                    id<MTLCommandBuffer> barrier = [queue commandBuffer]; [barrier commit]; [barrier waitUntilCompleted];
+                    std::vector<uint8_t> gpu(256 * 256 * 4), cpu(gpu.size());
+                    [texture getBytes:gpu.data() bytesPerRow:256 * 4 fromRegion:MTLRegionMake2D(0, 0, 256, 256) mipmapLevel:0];
+                    void* canvas = createSkiaCanvas(cpu.data(), 256, 256, 256 * 4);
+                    if (!canvas) return 1;
+                    renderToDisplayCanvas(&drawing, canvas, true, dark);
+                    destroySkiaCanvas(canvas);
+                    for (const auto* pixels : {&gpu, &cpu}) {
+                        int blue = 0, orange = 0;
+                        for (size_t i = 0; i < pixels->size(); i += 4) {
+                            if ((*pixels)[i + 3] < 200) continue;
+                            if ((*pixels)[i] > 180 && (*pixels)[i + 2] < 100) ++blue;
+                            if ((*pixels)[i + 2] > 180 && (*pixels)[i] < 100) ++orange;
+                        }
+                        if (blue < 10 || orange > 0) {
+                            matches = false;
+                            std::cerr << "Selection chrome must be blue: image=" << hasImage << " dark=" << dark
+                                      << " backend=" << (pixels == &gpu ? "GPU" : "CPU")
+                                      << " blue=" << blue << " orange=" << orange << '\n';
+                        }
+                    }
+                }
+            }
         }
         destroyGaneshMetalContext(context);
         if (!matches) return 1;

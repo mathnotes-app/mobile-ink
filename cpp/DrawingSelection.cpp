@@ -8,10 +8,11 @@ namespace nativedrawing {
 
 namespace {
 
-SkColor selectionChromeBlue(uint8_t alpha) {
-    // The live MTKView path lands on-screen with red/blue swapped.
-    // Ask Skia for the swapped value so the visible chrome is iOS blue.
-    return SkColorSetARGB(alpha, 255, 122, 0);
+SkColor selectionChromeBlue(uint8_t alpha, bool inkChannelsSwapped) {
+    // Mixed image/ink rendering applies the channel correction to ink only;
+    // selection chrome bypasses that filter and needs the complementary color.
+    return inkChannelsSwapped ? SkColorSetARGB(alpha, 0, 122, 255)
+                              : SkColorSetARGB(alpha, 255, 122, 0);
 }
 
 }  // namespace
@@ -450,7 +451,8 @@ bool DrawingSelection::isPointNearStroke(
 void DrawingSelection::renderSelection(
     SkCanvas* canvas,
     const std::vector<Stroke>& strokes,
-    const std::unordered_set<size_t>& selectedIndices
+    const std::unordered_set<size_t>& selectedIndices,
+    bool inkChannelsSwapped
 ) {
     if (selectedIndices.empty()) return;
 
@@ -461,14 +463,14 @@ void DrawingSelection::renderSelection(
 
         SkPaint framePaint;
         framePaint.setStyle(SkPaint::kStroke_Style);
-        framePaint.setColor(selectionChromeBlue(225));
+        framePaint.setColor(selectionChromeBlue(225, inkChannelsSwapped));
         framePaint.setStrokeWidth(2.0f);
         framePaint.setAntiAlias(true);
         canvas->drawRect(frame, framePaint);
 
         SkPaint fillPaint;
         fillPaint.setStyle(SkPaint::kFill_Style);
-        fillPaint.setColor(selectionChromeBlue(255));
+        fillPaint.setColor(selectionChromeBlue(255, inkChannelsSwapped));
         fillPaint.setAntiAlias(true);
 
         SkPaint borderPaint;

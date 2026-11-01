@@ -463,7 +463,7 @@ void SkiaDrawingEngine::prepareSelectionDragCache() {
     if (highlightSurface) {
         canvas = highlightSurface->getCanvas();
         canvas->clear(SK_ColorTRANSPARENT);
-        selection_->renderSelection(canvas, strokes_, selectedIndices_);
+        selection_->renderSelection(canvas, strokes_, selectedIndices_, displayInkSwap_);
         selectionHighlightSnapshot_ = highlightSurface->makeImageSnapshot();
     }
 

@@ -100,6 +100,13 @@ export function resolveDocumentRenderTarget(
   const nearestScale = zoom < 1 ? overviewScale : nearestNativeRenderScale(zoom, maxRenderScale);
   const settledScale = fitsPixelCap(visible, nearestScale, pixelRatio)
     ? nearestScale : quantizeNativeRenderScale(zoom, maxRenderScale);
+  // Keep an already-rendered sharp surface when zooming out slightly if it
+  // still covers the screen. This avoids a redraw now and preserves detail for
+  // the next zoom-in without allocating a larger surface or rendering tiles.
+  if (previous && previous.renderScale > settledScale) {
+    const rendered = toRect(previous, width, height);
+    if (contains(rendered, visible) && fitsPixelCap(rendered, previous.renderScale, pixelRatio)) return previous;
+  }
   const scale = isMoving && previous && fitsPixelCap(visible, previous.renderScale, pixelRatio)
     ? previous.renderScale : settledScale;
 

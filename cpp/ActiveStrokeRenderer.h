@@ -61,7 +61,8 @@ public:
         const std::vector<Point>& points,
         const SkPaint& paint,
         const std::string& toolType,
-        const ActiveStrokeViewport& viewport
+        const ActiveStrokeViewport& viewport,
+        size_t predictedPointCount
     );
 
     /**
