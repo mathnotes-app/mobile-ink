@@ -1379,6 +1379,7 @@ class MobileInkCanvasView: MTKView {
         } else if isSelectionMode || isMovingSelection {
             // Cancel selection drag or move
             if isMovingSelection { cancelSelectionMove(engine) }
+            if isDraggingSelection { cancelLasso(engine) }
             isDraggingSelection = false
             isMovingSelection = false
             hasSelectionMoveDelta = false
@@ -1710,6 +1711,7 @@ class MobileInkCanvasView: MTKView {
         if let engine = drawingEngine {
             if isMovingSelection { cancelSelectionMove(engine) }
             if isTransformingSelection { cancelSelectionTransform(engine) }
+            if isDraggingSelection { cancelLasso(engine) }
         }
         isDraggingSelection = false
         isMovingSelection = false

@@ -2,6 +2,10 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [0.3.11] - 2026-11-01
+
+- Clear a cancelled lasso's transient input state so subsequent image and text edits can be recorded and undone.
+
 ## [0.3.10] - 2026-11-01
 
 - Improve zoom previews, pen and crayon rendering, selection dragging, and pixel erasing in dense notebooks. iOS prepares sharp zoom tiles in the background and retains cached tiles across viewport changes.

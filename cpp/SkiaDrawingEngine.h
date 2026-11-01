@@ -52,6 +52,7 @@ public:
     void touchBegan(float x, float y, float pressure, float azimuth = 0.0f, float altitude = 1.57f, long timestamp = 0, bool isPencilInput = false);
     void touchMoved(float x, float y, float pressure, float azimuth = 0.0f, float altitude = 1.57f, long timestamp = 0, bool isPencilInput = false);
     void touchEnded(long timestamp = 0);
+    void cancelLasso();
     bool updateHoldShapePreview(long timestamp);
     void setHoldToShapeEnabled(bool enabled);
 

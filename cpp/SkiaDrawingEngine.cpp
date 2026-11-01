@@ -321,6 +321,17 @@ void SkiaDrawingEngine::touchMoved(
     }
 }
 
+void SkiaDrawingEngine::cancelLasso() {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+    if (!selection_->isLassoActive()) return;
+    selection_->cancelLasso();
+    currentPoints_.clear();
+    currentPath_.reset();
+    hasLastSmoothedPoint_ = false;
+    predictedPointCount_ = 0;
+    currentStrokeUsesEnhancedPenProfile_ = false;
+}
+
 void SkiaDrawingEngine::touchEnded(long timestamp) {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
 
