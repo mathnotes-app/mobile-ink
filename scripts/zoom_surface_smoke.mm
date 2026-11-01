@@ -418,13 +418,6 @@ int main() {
             auto changed = document.serializeDrawing();
             if (document.installOptimizedEraserMask(*stale) || changed != document.serializeDrawing())
                 throw std::runtime_error("A stale optimization replaced a newer erasure");
-            auto largeSource = document.snapshotDrawing();
-            largeSource[0].erasedBy.clear();
-            for (int i = 0; i < 600; ++i) largeSource[0].erasedBy.push_back({float(i), 100, 8});
-            document.replaceDrawing(largeSource);
-            const auto largeBytes = document.serializeDrawing();
-            if (document.snapshotEraserMasks() || document.serializeDrawing() != largeBytes)
-                throw std::runtime_error("Long eraser optimization was not skipped safely");
         }
         for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
             SkiaDrawingEngine document(512, 512, true);

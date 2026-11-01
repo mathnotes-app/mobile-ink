@@ -212,31 +212,9 @@ class MobileInkCanvasView: MTKView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.75, execute: work)
     }
 
-    private func pauseEraserMaskOptimization() {
-        guard eraserMaskInFlight || eraserMaskScheduled != nil else { return }
-        eraserMaskRevision &+= 1
-        eraserMaskScheduled?.cancel()
-        eraserMaskScheduled = nil
-        eraserMaskRestart = true
-    }
-
-    private func resumeEraserMaskOptimization() {
-        guard eraserMaskRestart, !isReleased, !viewportMotionActive, activeStrokeTool == nil,
-              !isMovingSelection, !isTransformingSelection, !isDraggingSelection else { return }
-        eraserMaskRestart = false
-        scheduleEraserMaskOptimization()
-    }
-
     private func startEraserMaskOptimization(_ revision: UInt64) {
         guard !isReleased, revision == eraserMaskRevision else { return }
-        eraserMaskScheduled = nil
-        guard !viewportMotionActive, activeStrokeTool == nil,
-              !isMovingSelection, !isTransformingSelection, !isDraggingSelection else {
-            eraserMaskRestart = true
-            return
-        }
         if eraserMaskInFlight { eraserMaskRestart = true; return }
-        eraserMaskRestart = false
         guard let engine = drawingEngine, let snapshot = snapshotEraserMasks(engine) else { return }
         eraserMaskInFlight = true
         advanceEraserMaskOptimization(snapshot, revision: revision)
@@ -251,7 +229,10 @@ class MobileInkCanvasView: MTKView {
                       let engine = self.drawingEngine, result != 0 else {
                     releaseEraserMaskSnapshot(snapshot)
                     self.eraserMaskInFlight = false
-                    self.resumeEraserMaskOptimization()
+                    if !self.isReleased && self.eraserMaskRestart {
+                        self.eraserMaskRestart = false
+                        self.startEraserMaskOptimization(self.eraserMaskRevision)
+                    }
                     return
                 }
                 if result == 1 { installOptimizedEraserMask(engine, snapshot) }
@@ -437,10 +418,8 @@ class MobileInkCanvasView: MTKView {
             pendingViewportQualityRefresh?.cancel()
             pendingViewportQualityRefresh = nil
             if viewportMotionActive {
-                pauseEraserMaskOptimization()
                 if let engine = drawingEngine { setViewportMotionActive(engine, true) }
             } else {
-                resumeEraserMaskOptimization()
                 // Rapid consecutive pinches should not rebuild high-resolution
                 // tiles between gestures. Sharpen once the viewport stays idle.
                 let refresh = DispatchWorkItem { [weak self] in
@@ -1119,7 +1098,6 @@ class MobileInkCanvasView: MTKView {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let engine = drawingEngine, let touch = touches.first else { return }
-        pauseEraserMaskOptimization()
 
         let location = touch.location(in: superview ?? self)
         let scaledX = Float(location.x * scaleX)
@@ -1288,10 +1266,7 @@ class MobileInkCanvasView: MTKView {
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let engine = drawingEngine, let touch = touches.first else { return }
-        defer {
-            if viewportMotionActive && activeStrokeTool == nil { scheduleZoomPreparation() }
-            resumeEraserMaskOptimization()
-        }
+        defer { if viewportMotionActive && activeStrokeTool == nil { scheduleZoomPreparation() } }
 
         // Don't process touches when in text mode
         if isTextMode {
@@ -1378,10 +1353,7 @@ class MobileInkCanvasView: MTKView {
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let engine = drawingEngine, let touch = touches.first else { return }
-        defer {
-            if viewportMotionActive && activeStrokeTool == nil { scheduleZoomPreparation() }
-            resumeEraserMaskOptimization()
-        }
+        defer { if viewportMotionActive && activeStrokeTool == nil { scheduleZoomPreparation() } }
         let cancelledTool = activeStrokeTool
         activeStrokeTool = nil
 
