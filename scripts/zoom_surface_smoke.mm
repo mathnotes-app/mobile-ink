@@ -510,6 +510,34 @@ int main() {
             }
             pen.touchEnded();
         }
+        // Joining incremental pen segments must not leave translucent seams
+        // across the interior of an otherwise opaque stroke.
+        for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
+            SkiaDrawingEngine incremental(512, 512, true), single(512, 512, true);
+            for (auto* engine : {&incremental, &single}) {
+                engine->setBackgroundType("pdf");
+                engine->setRenderViewport(1, 0, 0, 512, 512);
+                engine->setToolWithParams("pen", 20, 0xff000000, "pixel");
+                engine->touchBegan(40, 150, 1, 0, 1.57, 0, true);
+            }
+            for (int i = 1; i <= 80; ++i) {
+                incremental.touchMoved(40 + i * 5, 150, 1, 0, 1.57, i, true);
+                single.touchMoved(40 + i * 5, 150, 1, 0, 1.57, i, true);
+                (void)renderCrop(incremental, context, 512, 512);
+            }
+            auto actual = renderCrop(incremental, context, 512, 512);
+            auto expected = renderCrop(single, context, 512, 512);
+            int seamPixels = 0;
+            for (int y = 146; y <= 154; ++y) for (int x = 60; x < 400; ++x) {
+                const int a = SkColorGetA(actual.getColor(x, y));
+                const int e = SkColorGetA(expected.getColor(x, y));
+                if (e > 250 && a < 245) ++seamPixels;
+            }
+            if (seamPixels > 8) {
+                std::cerr << "Interior pen seam pixels: " << seamPixels << '\n';
+                throw std::runtime_error("Incremental pen preview left interior seams");
+            }
+        }
         // Repeated preview updates must not create spikes far outside the
         // same live geometry rendered all at once.
         {
@@ -642,13 +670,14 @@ int main() {
                     throw std::runtime_error("Settled motion frame differs from a fresh render");
             }
         }
-        // Reusing recorded crayon geometry across zoom levels must never
+        // Reusing recorded ink geometry across zoom levels must never
         // retain stale geometry after erasing or moving the stroke.
         for (auto* context : {static_cast<GrDirectContext*>(nullptr), first.get()}) {
+          for (const char* tool : {"crayon", "pen"}) {
             SkiaDrawingEngine document(1024, 1024, true);
             document.setBackgroundType("pdf");
             document.setHoldToShapeEnabled(false);
-            document.setToolWithParams("crayon", 16, 0xff000000, "pixel");
+            document.setToolWithParams(tool, 16, 0xff000000, "pixel");
             document.touchBegan(30, 300, 0.7);
             for (int x = 35; x <= 920; x += 5) document.touchMoved(x, 300 + 30 * std::sin(x * .02), 0.7);
             document.touchEnded();
@@ -668,16 +697,17 @@ int main() {
             auto expected = renderCrop(fresh, context, 1024, 1024);
             for (int y = 0; y < 1024; ++y) for (int x = 0; x < 1024; ++x)
                 if (cached.getColor(x, y) != expected.getColor(x, y))
-                    throw std::runtime_error("Reused crayon geometry became stale after erase");
+                    throw std::runtime_error("Reused ink geometry became stale after erase");
             if (!document.selectStrokeAt(500, 300 + 30 * std::sin(10.0)))
-                throw std::runtime_error("Cannot select crayon for cache test");
+                throw std::runtime_error("Cannot select ink for cache test");
             document.beginSelectionDrag(); document.moveSelection(0, 40); document.finalizeMove(); document.clearSelection();
             saved = document.snapshotDrawing(); fresh.replaceDrawing(saved);
             cached = renderCrop(document, context, 1024, 1024);
             expected = renderCrop(fresh, context, 1024, 1024);
             for (int y = 0; y < 1024; ++y) for (int x = 0; x < 1024; ++x)
                 if (cached.getColor(x, y) != expected.getColor(x, y))
-                    throw std::runtime_error("Reused crayon geometry became stale after moving");
+                    throw std::runtime_error("Reused ink geometry became stale after moving");
+          }
         }
         for (auto* context : {first.get(), static_cast<GrDirectContext*>(nullptr)}) {
             SkiaDrawingEngine cached(1024, 2048, true);

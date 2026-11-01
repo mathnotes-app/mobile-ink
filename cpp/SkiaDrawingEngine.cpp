@@ -705,8 +705,8 @@ void SkiaDrawingEngine::clear() {
     delta.clearedEraserCircles = eraserCircles_;
 
     strokes_.clear();
-    crayonPictureCache_.clear();
-    crayonPictureCacheBytes_ = 0;
+    crayonPictureCache_ = {};
+    penPictureCache_ = {};
     eraserCircles_.clear();
     resetIndexedSelectionState();
     currentPoints_.clear();
@@ -903,8 +903,8 @@ void SkiaDrawingEngine::replaceDrawing(std::vector<Stroke>& preparedStrokes) {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
     cancelSelectionTransform();
     strokes_.swap(preparedStrokes);
-    crayonPictureCache_.clear();
-    crayonPictureCacheBytes_ = 0;
+    crayonPictureCache_ = {};
+    penPictureCache_ = {};
     for (const auto& stroke : strokes_) includeLayerOrder(stroke.layerOrder);
     eraserCircles_.clear();  // Clear eraser circles when loading
     bakedCircleCount_ = 0;  // No circles to bake

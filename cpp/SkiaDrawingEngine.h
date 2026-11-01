@@ -295,21 +295,25 @@ private:
     uint64_t strokeTileEpoch_ = 1;
     uint64_t strokeTileUseCounter_ = 0;
     size_t strokeTileCacheBytes_ = 0;
-    struct CrayonPictureKey {
+    struct StrokePictureKey {
         uint32_t pathID, color, widthBits;
-        bool operator==(const CrayonPictureKey& other) const {
+        bool operator==(const StrokePictureKey& other) const {
             return pathID == other.pathID && color == other.color && widthBits == other.widthBits;
         }
     };
-    struct CrayonPictureKeyHasher {
-        size_t operator()(const CrayonPictureKey& key) const {
+    struct StrokePictureKeyHasher {
+        size_t operator()(const StrokePictureKey& key) const {
             return (static_cast<uint64_t>(key.pathID) * 1315423911u ^ key.color) * 1315423911u ^ key.widthBits;
         }
     };
-    struct CrayonPictureEntry { sk_sp<SkPicture> picture; size_t bytes; uint64_t used; };
-    std::unordered_map<CrayonPictureKey, CrayonPictureEntry, CrayonPictureKeyHasher> crayonPictureCache_;
-    size_t crayonPictureCacheBytes_ = 0;
-    uint64_t crayonPictureUseCounter_ = 0;
+    struct StrokePictureEntry { sk_sp<SkPicture> picture; size_t bytes; uint64_t used; };
+    struct StrokePictureCache {
+        std::unordered_map<StrokePictureKey, StrokePictureEntry, StrokePictureKeyHasher> entries;
+        size_t bytes = 0;
+        uint64_t useCounter = 0;
+    };
+    StrokePictureCache crayonPictureCache_;
+    StrokePictureCache penPictureCache_;
     float renderScale_ = 1.0f;
     float visibleLeft_ = 0.0f;
     float visibleTop_ = 0.0f;
@@ -389,10 +393,10 @@ private:
         const SkPaint& paint
     );
     const void* strokeTileContext_ = nullptr;
-    sk_sp<SkImage> renderStrokeTile(SkCanvas* targetCanvas, const StrokeTileKey& key, int tileWidth, int tileHeight, float scale, const std::vector<size_t>& candidates, std::unordered_map<size_t, sk_sp<SkPicture>>& crayonPictures, const sk_sp<SkImage>& base = nullptr);
+    sk_sp<SkImage> renderStrokeTile(SkCanvas* targetCanvas, const StrokeTileKey& key, int tileWidth, int tileHeight, float scale, const std::vector<size_t>& candidates, std::unordered_map<size_t, sk_sp<SkPicture>>& strokePictures, const sk_sp<SkImage>& base = nullptr);
     bool applyAppendedStrokes(SkCanvas* canvas, const StrokeTileKey& key, StrokeTileEntry& entry);
     void appendStrokeToCachedTiles(const SkRect& bounds, size_t strokeIndex);
-    sk_sp<SkPicture> crayonPicture(const Stroke& stroke, const SkPaint& paint);
+    sk_sp<SkPicture> strokePicture(const Stroke& stroke, const SkPaint& paint);
     void pruneStrokeTileCache();
 
     // Pixel eraser stroke splitting - splits a stroke by removing portions that intersect the eraser

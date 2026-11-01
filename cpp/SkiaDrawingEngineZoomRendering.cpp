@@ -13,6 +13,7 @@ namespace {
 constexpr int kStrokeTileSize = 512;
 constexpr size_t kMaxStrokeTileCacheBytes = 96 * 1024 * 1024;
 constexpr size_t kMaxCrayonPictureCacheBytes = 32 * 1024 * 1024;
+constexpr size_t kMaxPenPictureCacheBytes = 16 * 1024 * 1024;
 
 enum class EraserMaskMode { none, clip, clearLayer };
 
@@ -56,15 +57,18 @@ int renderScaleBucket(float scale) {
 
 } // namespace
 
-sk_sp<SkPicture> SkiaDrawingEngine::crayonPicture(const Stroke& stroke, const SkPaint& paint) {
+sk_sp<SkPicture> SkiaDrawingEngine::strokePicture(const Stroke& stroke, const SkPaint& paint) {
     uint32_t widthBits = 0;
     const float width = paint.getStrokeWidth();
     static_assert(sizeof(widthBits) == sizeof(width));
     std::memcpy(&widthBits, &width, sizeof(width));
-    const CrayonPictureKey key{stroke.path.getGenerationID(), displayInkPaint(paint).getColor(), widthBits};
-    auto found = crayonPictureCache_.find(key);
-    if (found != crayonPictureCache_.end()) {
-        found->second.used = ++crayonPictureUseCounter_;
+    const StrokePictureKey key{stroke.path.getGenerationID(), displayInkPaint(paint).getColor(), widthBits};
+    const bool isPen = stroke.toolType == "pen";
+    auto& cache = isPen ? penPictureCache_ : crayonPictureCache_;
+    const size_t limit = isPen ? kMaxPenPictureCacheBytes : kMaxCrayonPictureCacheBytes;
+    auto found = cache.entries.find(key);
+    if (found != cache.entries.end()) {
+        found->second.used = ++cache.useCounter;
         return found->second.picture;
     }
     SkPictureRecorder recorder;
@@ -73,17 +77,21 @@ sk_sp<SkPicture> SkiaDrawingEngine::crayonPicture(const Stroke& stroke, const Sk
         SkRect::MakeWH(static_cast<float>(width_), static_cast<float>(height_)), &hierarchy);
     renderStrokeGeometry(recording, stroke, paint);
     auto picture = recorder.finishRecordingAsPicture();
-    const size_t bytes = picture ? picture->approximateBytesUsed() : 0;
-    if (picture && key.pathID && bytes <= kMaxCrayonPictureCacheBytes) {
-        while (crayonPictureCacheBytes_ + bytes > kMaxCrayonPictureCacheBytes && !crayonPictureCache_.empty()) {
-            auto oldest = crayonPictureCache_.begin();
-            for (auto it = crayonPictureCache_.begin(); it != crayonPictureCache_.end(); ++it)
+    // A picture also retains its path points outside the recording itself.
+    // Budget conservatively for the interpolated pen outline as well.
+    const size_t pointBytes = isPen
+        ? (stroke.points.size() > limit / 256 ? limit : stroke.points.size() * 256) : 0;
+    const size_t bytes = picture ? picture->approximateBytesUsed() + pointBytes : 0;
+    if (picture && key.pathID && bytes <= limit) {
+        while (cache.bytes + bytes > limit && !cache.entries.empty()) {
+            auto oldest = cache.entries.begin();
+            for (auto it = cache.entries.begin(); it != cache.entries.end(); ++it)
                 if (it->second.used < oldest->second.used) oldest = it;
-            crayonPictureCacheBytes_ -= oldest->second.bytes;
-            crayonPictureCache_.erase(oldest);
+            cache.bytes -= oldest->second.bytes;
+            cache.entries.erase(oldest);
         }
-        crayonPictureCacheBytes_ += bytes;
-        crayonPictureCache_.emplace(key, CrayonPictureEntry{picture, bytes, ++crayonPictureUseCounter_});
+        cache.bytes += bytes;
+        cache.entries.emplace(key, StrokePictureEntry{picture, bytes, ++cache.useCounter});
     }
     return picture;
 }
@@ -270,7 +278,7 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
     int tileHeight,
     float scale,
     const std::vector<size_t>& candidates,
-    std::unordered_map<size_t, sk_sp<SkPicture>>& crayonPictures,
+    std::unordered_map<size_t, sk_sp<SkPicture>>& strokePictures,
     const sk_sp<SkImage>& base
 ) {
     SkImageInfo info = SkImageInfo::MakeN32Premul(tileWidth, tileHeight);
@@ -336,12 +344,21 @@ sk_sp<SkImage> SkiaDrawingEngine::renderStrokeTile(
         if (!layerBounds.intersect(strokeBounds, tileBounds)) continue;
         const auto mask = beginEraserMask(tileCanvas, stroke, layerBounds);
 
-        if (stroke.toolType == "crayon" && stroke.points.size() >= 64 && !tileBounds.contains(strokeBounds)) {
-            auto it = crayonPictures.find(i);
-            if (it == crayonPictures.end()) {
+        if (stroke.toolType == "pen" && stroke.points.size() >= 32 &&
+            stroke.points.size() <= kMaxPenPictureCacheBytes / 256) {
+            // Do not retain all pen pictures for the duration of the frame:
+            // a large note can contain more geometry than the bounded cache.
+            if (auto picture = strokePicture(stroke, strokePaint)) {
+                tileCanvas->drawPicture(picture);
+            } else {
+                renderStrokeGeometry(tileCanvas, stroke, strokePaint);
+            }
+        } else if (stroke.toolType == "crayon" && stroke.points.size() >= 64 && !tileBounds.contains(strokeBounds)) {
+            auto it = strokePictures.find(i);
+            if (it == strokePictures.end()) {
                 // Keep bounded, immutable geometry across frames so each new
-                // zoom bucket need not rebuild the same crayon segments.
-                it = crayonPictures.emplace(i, crayonPicture(stroke, strokePaint)).first;
+                // zoom bucket need not rebuild the same stroke segments.
+                it = strokePictures.emplace(i, strokePicture(stroke, strokePaint)).first;
             }
             if (it->second) tileCanvas->drawPicture(it->second);
         } else {
@@ -590,7 +607,7 @@ void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
     // Collect once, only if a missing tile needs geometry. Scanning the entire
     // lecture independently for every tile multiplies work as notes grow.
     std::vector<size_t> candidates;
-    std::unordered_map<size_t, sk_sp<SkPicture>> crayonPictures;
+    std::unordered_map<size_t, sk_sp<SkPicture>> strokePictures;
     bool candidatesReady = false;
     const float visibleLeft = visibleBounds.left();
     const float visibleTop = visibleBounds.top();
@@ -644,7 +661,7 @@ void SkiaDrawingEngine::renderScaleAwareStrokes(SkCanvas* canvas) {
                     }
                     candidatesReady = true;
                 }
-                sk_sp<SkImage> image = renderStrokeTile(canvas, key, tileWidth, tileHeight, bucketScale, candidates, crayonPictures);
+                sk_sp<SkImage> image = renderStrokeTile(canvas, key, tileWidth, tileHeight, bucketScale, candidates, strokePictures);
                 if (!image) {
                     continue;
                 }
