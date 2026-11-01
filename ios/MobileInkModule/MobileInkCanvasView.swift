@@ -106,7 +106,10 @@ class MobileInkCanvasView: MTKView {
         let revision = zoomPreparationRevision
         let work = DispatchWorkItem { [weak self] in self?.startZoomPreparation(revision) }
         zoomPreparationScheduled = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
+        // During a pinch the target can change every frame. A debounce waits
+        // for fingers to stop moving before it ever starts sharp tiles.
+        if viewportMotionActive { DispatchQueue.main.async(execute: work) }
+        else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work) }
     }
 
     private func startZoomPreparation(_ revision: UInt64) {
@@ -146,25 +149,33 @@ class MobileInkCanvasView: MTKView {
                 self.zoomPreparationInFlight = false
                 return
             }
-            guard !self.isReleased, let engine = self.drawingEngine,
-                  revision == self.zoomPreparationRevision else {
+            guard !self.isReleased, let engine = self.drawingEngine else {
                 if let texture { releaseZoomTileTexture(texture) }
                 releaseZoomTileSnapshot(snapshot)
                 self.zoomPreparationInFlight = false
-                if !self.isReleased { self.scheduleZoomPreparation() }
                 return
             }
+            // A viewport change does not invalidate a completed tile. Install
+            // it before moving on to the new target; the engine separately
+            // rejects changes to the drawing, appearance, or GPU context.
+            let targetChanged = revision != self.zoomPreparationRevision
             if result == 1, let texture, let context = self.ganeshMetalContext,
                installPreparedZoomTile(engine, snapshot, context, texture) {
+                if targetChanged {
+                    releaseZoomTileSnapshot(snapshot)
+                    self.zoomPreparationInFlight = false
+                    self.scheduleZoomPreparation()
+                    return
+                }
                 self.advanceZoomPreparation(snapshot, revision: revision, json: json)
                 return
             }
             if let texture, (result != 1 || self.ganeshMetalContext == nil) { releaseZoomTileTexture(texture) }
-            let ready = result == 0 && hasPreparedZoomTiles(engine, snapshot)
+            let ready = !targetChanged && result == 0 && hasPreparedZoomTiles(engine, snapshot)
             releaseZoomTileSnapshot(snapshot)
             self.zoomPreparationInFlight = false
             if ready { self.onZoomPreparationReady?(["json": json]) }
-            else if result >= 0 { self.scheduleZoomPreparation() }
+            else if targetChanged || result >= 0 { self.scheduleZoomPreparation() }
         }
     }
     @objc var documentImageLayersJSON: String? {

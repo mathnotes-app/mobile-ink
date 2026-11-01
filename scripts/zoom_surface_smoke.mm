@@ -112,6 +112,13 @@ int main() {
             auto worker = SkSurfaces::RenderTarget(second.get(), skgpu::Budgeted::kYes,
                 SkImageInfo::MakeN32Premul(512, 512));
             if (!worker) throw std::runtime_error("Could not allocate worker target");
+            // A changed viewport can still reuse a completed tile when the
+            // document and render context are unchanged.
+            if (SkiaDrawingEngine::renderPreparedStrokeTile(*batch, worker->getCanvas(), second.get()) != 1 ||
+                !live.installPreparedStrokeTile(*batch)) throw std::runtime_error("Could not install an overlapping tile");
+            auto overlapping = live.prepareStrokeTiles(2, 0, 0, 245, 245);
+            if (!overlapping || !live.hasPreparedStrokeTiles(*overlapping))
+                throw std::runtime_error("A changed viewport could not reuse its completed tile");
             int tileResult;
             while ((tileResult = SkiaDrawingEngine::renderPreparedStrokeTile(*batch, worker->getCanvas(), second.get())) == 1) {
                 if (!live.installPreparedStrokeTile(*batch)) throw std::runtime_error("Fresh tile rejected");
@@ -131,6 +138,12 @@ int main() {
             for (int y = 0; y < 500; ++y) for (int x = 0; x < 500; ++x)
                 if (actual.getColor(x, y) != expected.getColor(x, y))
                     throw std::runtime_error("Prepared tile changed zoom pixels");
+            auto appearanceStale = live.prepareStrokeTiles(3, 0, 0, 170, 170);
+            if (!appearanceStale || SkiaDrawingEngine::renderPreparedStrokeTile(*appearanceStale, worker->getCanvas(), second.get()) != 1)
+                throw std::runtime_error("Could not prepare stale-appearance test");
+            live.setInkDisplayTransform(false, false);
+            if (live.installPreparedStrokeTile(*appearanceStale))
+                throw std::runtime_error("Installed a tile from a previous appearance");
             auto stale = live.prepareStrokeTiles(3, 0, 0, 170, 170);
             if (!stale || SkiaDrawingEngine::renderPreparedStrokeTile(*stale, worker->getCanvas(), second.get()) != 1)
                 throw std::runtime_error("Could not prepare stale-tile test");
