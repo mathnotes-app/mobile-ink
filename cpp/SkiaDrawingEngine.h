@@ -24,8 +24,6 @@
 #include <cstdint>
 #include "DrawingTypes.h"
 
-class GrDirectContext;
-
 namespace nativedrawing {
 
 // Forward declarations for helper modules
@@ -38,7 +36,6 @@ class StrokeSplitter;
 class BatchExporter;
 class ActiveStrokeRenderer;
 struct EraserMaskOptimizationBatch;
-struct StrokeTilePreparation;
 
 class SkiaDrawingEngine {
 public:
@@ -117,10 +114,6 @@ public:
         float visibleHeight
     );
     void setViewportMotionActive(bool active);
-    std::unique_ptr<StrokeTilePreparation> prepareStrokeTiles(float scale, float left, float top, float width, float height);
-    bool installPreparedStrokeTile(StrokeTilePreparation& preparation);
-    bool hasPreparedStrokeTiles(const StrokeTilePreparation& preparation);
-    static int renderPreparedStrokeTile(StrokeTilePreparation& preparation, SkCanvas* canvas, GrDirectContext* context);
     sk_sp<SkImage> makeSnapshot();
 
     // Batch export: Render multiple pages to PNG without creating new engine each time
@@ -300,8 +293,6 @@ private:
 
     std::unordered_map<StrokeTileKey, StrokeTileEntry, StrokeTileKeyHasher> strokeTileCache_;
     uint64_t strokeTileEpoch_ = 1;
-    uint64_t strokeTileContentRevision_ = 1;
-    std::shared_ptr<const uint8_t> strokeTileIdentity_ = std::make_shared<const uint8_t>(0);
     uint64_t strokeTileUseCounter_ = 0;
     size_t strokeTileCacheBytes_ = 0;
     struct StrokePictureKey {

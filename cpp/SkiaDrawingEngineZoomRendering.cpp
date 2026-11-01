@@ -174,7 +174,6 @@ bool SkiaDrawingEngine::drawCachedStrokeTileFallback(
 }
 
 void SkiaDrawingEngine::appendStrokeToCachedTiles(const SkRect& bounds, size_t strokeIndex) {
-    ++strokeTileContentRevision_;
     selectionDragLayers_.clear();
     if (bounds.isEmpty()) return;
     for (auto it = strokeTileCache_.begin(); it != strokeTileCache_.end();) {
@@ -222,7 +221,6 @@ void SkiaDrawingEngine::renderVisibleViewport(SkCanvas* canvas) {
 }
 
 void SkiaDrawingEngine::markStrokeCachesDirty() {
-    ++strokeTileContentRevision_;
     needsStrokeRedraw_ = true;
     strokeTileEpoch_++;
     if (strokeTileEpoch_ == 0) {
@@ -233,7 +231,6 @@ void SkiaDrawingEngine::markStrokeCachesDirty() {
 }
 
 void SkiaDrawingEngine::invalidateStrokeTilesForRect(const SkRect& bounds) {
-    ++strokeTileContentRevision_;
     selectionDragLayers_.clear();
     if (strokeTileCache_.empty() || bounds.isEmpty()) {
         return;

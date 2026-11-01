@@ -1,5 +1,5 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { PixelRatio, Platform, StyleSheet, View } from 'react-native';
+import { PixelRatio, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NativeInkCanvas, type NativeInkCanvasRef } from '../NativeInkCanvas';
 import ZoomableInkViewport, { type ZoomableInkViewportRef, type TouchExclusionRect } from '../ZoomableInkViewport';
@@ -84,7 +84,6 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
     [contentPadding, pageHeight, pageWidth]);
   const [renderTarget, setRenderTarget] = useState<DocumentRenderTarget>(
     () => resolveDocumentRenderTarget(null, null, renderLayout(), false));
-  const [zoomPreparationTarget, setZoomPreparationTarget] = useState<DocumentRenderTarget | null>(null);
   const [selectionRects, setSelectionRects] = useState<TouchExclusionRect[]>([]);
   const blockedTouchRects = useMemo(() => [...selectionRects, ...(props.blockedTouchRects ?? [])],
     [props.blockedTouchRects, selectionRects]);
@@ -235,33 +234,13 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
   const onTransform = useCallback((next: InfiniteInkViewportTransform) => {
     transformRef.current = next;
     updateRenderTarget();
-    if (isMoving.current && Platform.OS === 'ios' && props.renderBackend !== 'cpu') {
-      // Preparing the visible area plus a modest margin gets sharp pixels
-      // ready sooner while retaining room for small pans.
-      const layout = { ...renderLayout(), overscanFraction: 0.15 };
-      setZoomPreparationTarget(previous => resolveDocumentRenderTarget(previous, next, layout, false));
-    }
     const index = getVisiblePageIndex(next, pageHeight, pagesRef.current.length, contentPadding);
     if (index !== currentPage.current) {
       currentPage.current = index; setVisiblePage(index);
       callbacks.current.onCurrentPageChange?.(index);
     }
     callbacks.current.onTransformChange?.(next);
-  }, [contentPadding, pageHeight, props.renderBackend, renderLayout, updateRenderTarget]);
-  const onZoomPreparationReady = useCallback(({ nativeEvent }: { nativeEvent: { json: string } }) => {
-    let candidate: DocumentRenderTarget;
-    try { candidate = JSON.parse(nativeEvent.json) as DocumentRenderTarget; }
-    catch { return; }
-    if (!candidate || [candidate.renderScale, candidate.leftRatio, candidate.topRatio,
-      candidate.widthRatio, candidate.heightRatio].some(value => typeof value !== 'number' || !Number.isFinite(value)) ||
-      candidate.renderScale <= 0 || candidate.leftRatio < 0 || candidate.topRatio < 0 ||
-      candidate.widthRatio <= 0 || candidate.heightRatio <= 0 ||
-      candidate.leftRatio + candidate.widthRatio > 1.000001 || candidate.topRatio + candidate.heightRatio > 1.000001) return;
-    const layout = renderLayout();
-    if (resolveDocumentRenderTarget(candidate, transformRef.current, layout, false) !== candidate) return;
-    setRenderTarget(previous => previous.renderScale >= candidate.renderScale &&
-      resolveDocumentRenderTarget(previous, transformRef.current, layout, true) === previous ? previous : candidate);
-  }, [renderLayout]);
+  }, [contentPadding, pageHeight, updateRenderTarget]);
   return <GestureHandlerRootView style={[styles.root, props.style, props.displayAppearance === 'dark' && { backgroundColor: '#171717' }]}>
     <ZoomableInkViewport ref={viewport} style={styles.viewport} minScale={props.minScale ?? 1} maxScale={props.maxScale ?? 5}
       contentWidth={pageWidth} contentHeight={documentHeight} contentPadding={contentPadding} isLandscape
@@ -285,8 +264,6 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
             renderBackend={props.renderBackend} renderScale={renderTarget.renderScale}
             renderViewportLeftRatio={renderTarget.leftRatio} renderViewportTopRatio={renderTarget.topRatio}
             renderViewportWidthRatio={renderTarget.widthRatio} renderViewportHeightRatio={renderTarget.heightRatio}
-            zoomPreparationTarget={zoomPreparationTarget ? JSON.stringify(zoomPreparationTarget) : undefined}
-            onZoomPreparationReady={onZoomPreparationReady}
             drawingPolicy={props.fingerDrawingEnabled ? 'anyinput' : 'pencilonly'} onCanvasReady={onReady}
             holdToShapeEnabled={props.holdToShapeEnabled}
             viewportMotionActive={viewportMotionActive}

@@ -642,8 +642,6 @@ export const NativeInkCanvas = forwardRef<
     renderViewportTopRatio: props.renderViewportTopRatio ?? 0,
     renderViewportWidthRatio: props.renderViewportWidthRatio ?? 1,
     renderViewportHeightRatio: props.renderViewportHeightRatio ?? 1,
-    ...(Platform.OS === 'ios' && props.zoomPreparationTarget
-      ? { zoomPreparationTarget: props.zoomPreparationTarget, onZoomPreparationReady: props.onZoomPreparationReady } : {}),
     onPencilDoubleTap: props.onPencilDoubleTap,
     ...(supportsRenderBackendProp
       ? { renderBackend: props.renderBackend ?? DEFAULT_NATIVE_INK_RENDER_BACKEND }
