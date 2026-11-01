@@ -8,6 +8,37 @@
 #include <include/core/SkMatrix.h>
 
 namespace nativedrawing {
+std::vector<std::vector<Stroke>> splitStrokesByLayer(
+    const std::vector<Stroke>& strokes, const std::vector<uint64_t>& boundaries) {
+    if (!std::is_sorted(boundaries.begin(), boundaries.end()) ||
+        std::adjacent_find(boundaries.begin(), boundaries.end()) != boundaries.end())
+        throw std::invalid_argument("Layer boundaries must be sorted and unique");
+    std::vector<std::vector<Stroke>> groups(boundaries.size() + 1);
+    std::vector<std::unordered_map<size_t, size_t>> remapped(groups.size());
+    for (size_t index = 0; index < strokes.size(); ++index) {
+        const auto& stroke = strokes[index];
+        if (!stroke.isEraser) {
+            const size_t group = std::upper_bound(boundaries.begin(), boundaries.end(), stroke.layerOrder) - boundaries.begin();
+            remapped[group][index] = groups[group].size();
+            groups[group].push_back(stroke);
+            continue;
+        }
+        for (size_t group = 0; group < groups.size(); ++group) {
+            Stroke eraser = stroke;
+            eraser.affectedStrokeIndices.clear();
+            for (size_t target : stroke.affectedStrokeIndices) {
+                auto found = remapped[group].find(target);
+                if (found != remapped[group].end()) eraser.affectedStrokeIndices.insert(found->second);
+            }
+            if (!eraser.affectedStrokeIndices.empty() ||
+                (stroke.affectedStrokeIndices.empty() && !groups[group].empty())) {
+                remapped[group][index] = groups[group].size();
+                groups[group].push_back(std::move(eraser));
+            }
+        }
+    }
+    return groups;
+}
 namespace {
 void validateHeight(float height) {
     if (!std::isfinite(height) || height <= 0) throw std::invalid_argument("Invalid document page height");

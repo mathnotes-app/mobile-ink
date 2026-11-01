@@ -98,6 +98,7 @@ function InfiniteInkCanvasImpl(
     initialPageCount = DEFAULT_INITIAL_PAGE_COUNT,
     pageWidth = DEFAULT_PAGE_WIDTH,
     pageHeight = DEFAULT_PAGE_HEIGHT,
+    displayAppearance = "light",
     backgroundType = "plain",
     renderBackend = DEFAULT_NATIVE_INK_RENDER_BACKEND,
     pdfBackgroundBaseUri,
@@ -108,6 +109,7 @@ function InfiniteInkCanvasImpl(
     contentPadding = DEFAULT_CONTENT_PADDING,
     showPageLabels = true,
     overlay,
+    onContentTap,
     onReady,
     onError,
     onDrawingChange,
@@ -624,7 +626,7 @@ function InfiniteInkCanvasImpl(
   }, [reportAssignmentFailure, assignEnginesToPage, onReady]);
 
   return (
-    <GestureHandlerRootView style={[styles.root, style]}>
+    <GestureHandlerRootView style={[styles.root, style, displayAppearance === 'dark' && { backgroundColor: '#171717' }]}>
       <ZoomableInkViewport
         ref={viewportRef}
         style={styles.viewport}
@@ -635,6 +637,7 @@ function InfiniteInkCanvasImpl(
         contentPadding={contentPadding}
         isLandscape={true}
         fingerDrawingEnabled={fingerDrawingEnabled}
+        onContentTap={fingerDrawingEnabled ? undefined : onContentTap}
         enableMomentumScroll={true}
         lockHorizontalPanNearFit={true}
         blockedTouchRects={selectionTouchRects}
@@ -654,6 +657,7 @@ function InfiniteInkCanvasImpl(
               pages={pages}
               pageWidth={pageWidth}
               pageHeight={pageHeight}
+              displayAppearance={displayAppearance}
               backgroundType={backgroundType}
               pdfBackgroundBaseUri={pdfBackgroundBaseUri}
               showPageLabels={showPageLabels}
@@ -666,6 +670,7 @@ function InfiniteInkCanvasImpl(
               contentPadding={contentPadding}
               viewportTransform={nativeViewportTransform}
               renderScale={nativeRenderScale}
+              displayAppearance={displayAppearance}
               backgroundType={backgroundType}
               renderBackend={renderBackend}
               pdfBackgroundBaseUri={pdfBackgroundBaseUri}
@@ -680,7 +685,7 @@ function InfiniteInkCanvasImpl(
               onSlotCaptureBeforeUnmount={updatePageData}
             />
             {overlay}
-            <PageBreaks pages={pages} pageHeight={pageHeight} />
+            <PageBreaks pages={pages} pageHeight={pageHeight} displayAppearance={displayAppearance} />
           </View>
         </View>
       </ZoomableInkViewport>

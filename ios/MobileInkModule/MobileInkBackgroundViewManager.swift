@@ -23,6 +23,10 @@ class BackgroundPreviewContainerView: UIView {
     }
   }
 
+  @objc var displayAppearance: String? {
+    didSet { backgroundView.isDarkMode = displayAppearance == "dark" }
+  }
+
   @objc var pdfBackgroundUri: String? {
     didSet {
       backgroundView.loadPDFBackground(uri: pdfBackgroundUri)

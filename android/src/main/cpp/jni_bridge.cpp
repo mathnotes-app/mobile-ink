@@ -3,6 +3,7 @@
 #include <android/bitmap.h>
 #include <GLES2/gl2.h>
 #include "SkiaDrawingEngine.h"
+#include "DisplayAppearance.h"
 #include "DrawingSerialization.h"
 #include <include/core/SkCanvas.h>
 #include <include/core/SkColorFilter.h>
@@ -118,13 +119,13 @@ sk_sp<SkImage> makeRedBlueSwappedImage(const sk_sp<SkImage>& image) {
     return surface->makeImageSnapshot();
 }
 
-void renderWithDisplayColorOrdering(SkiaDrawingEngine* engine, SkCanvas* canvas, bool cropped = false) {
+void renderWithDisplayColorOrdering(SkiaDrawingEngine* engine, SkCanvas* canvas, bool cropped, bool dark) {
     if (!engine || !canvas) {
         return;
     }
 
     SkPaint outputPaint;
-    outputPaint.setColorFilter(makeRedBlueSwapFilter());
+    outputPaint.setColorFilter(nativedrawing::makeDisplayColorFilter(dark, true));
     canvas->saveLayer(nullptr, &outputPaint);
     if (cropped) engine->renderVisibleViewport(canvas);
     else engine->render(canvas);
@@ -468,6 +469,12 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_updateHoldShapePreview(
     }
 
     return JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_mathnotes_mobileink_MobileInkCanvasView_setHoldToShapeEnabledNative(JNIEnv* env, jobject obj, jlong contextPtr, jboolean enabled) {
+    auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
+    if (ctx && ctx->engine) ctx->engine->setHoldToShapeEnabled(enabled == JNI_TRUE);
 }
 
 // Canvas operations
@@ -864,26 +871,29 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_freeDrawingSnapshot(JNIEnv* env
     delete reinterpret_cast<std::vector<nativedrawing::Stroke>*>(snapshotPtr);
 }
 
-JNIEXPORT void JNICALL
+JNIEXPORT jboolean JNICALL
 Java_com_mathnotes_mobileink_MobileInkCanvasView_deserializeDrawing(
     JNIEnv* env, jobject obj, jlong contextPtr, jbyteArray data) {
 
     auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
     if (ctx && ctx->engine && data) {
-        jsize len = env->GetArrayLength(data);
-        jbyte* bytes = env->GetByteArrayElements(data, nullptr);
-
-        std::vector<uint8_t> vec(reinterpret_cast<uint8_t*>(bytes),
-                                  reinterpret_cast<uint8_t*>(bytes) + len);
-        ctx->engine->deserializeDrawing(vec);
-
-        env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
+        try {
+            const jsize len = env->GetArrayLength(data);
+            std::vector<uint8_t> bytes(static_cast<size_t>(len));
+            if (len) env->GetByteArrayRegion(data, 0, len, reinterpret_cast<jbyte*>(bytes.data()));
+            if (env->ExceptionCheck()) return JNI_FALSE;
+            return ctx->engine->deserializeDrawing(bytes) ? JNI_TRUE : JNI_FALSE;
+        } catch (...) {
+            LOGE("deserializeDrawing: unable to load drawing");
+            return JNI_FALSE;
+        }
     }
+    return JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
 Java_com_mathnotes_mobileink_MobileInkCanvasView_renderGaneshToCurrentSurface(
-    JNIEnv* env, jobject obj, jlong contextPtr, jint width, jint height) {
+    JNIEnv* env, jobject obj, jlong contextPtr, jint width, jint height, jboolean dark) {
 
     auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
     if (!ctx || !ctx->engine || width <= 0 || height <= 0) {
@@ -956,7 +966,7 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_renderGaneshToCurrentSurface(
     }
 
     SkCanvas* canvas = ctx->ganeshSurface->getCanvas();
-    renderWithDisplayColorOrdering(ctx->engine.get(), canvas, ctx->continuousDocument);
+    renderWithDisplayColorOrdering(ctx->engine.get(), canvas, ctx->continuousDocument, dark == JNI_TRUE);
     ctx->ganeshContext->flushAndSubmit(ctx->ganeshSurface.get());
     return JNI_TRUE;
 }

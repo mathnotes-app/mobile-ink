@@ -194,6 +194,7 @@ std::vector<Stroke> StrokeSplitter::splitStrokeAtPoint(
     auto saveSegment = [&]() {
         if (currentSegment.size() >= 2) {
             Stroke newStroke;
+            newStroke.layerOrder = originalStroke.layerOrder;
             newStroke.points = downsamplePoints(currentSegment);
             newStroke.paint = originalStroke.paint;
             newStroke.isEraser = false;

@@ -20,4 +20,8 @@ std::vector<Stroke> composeContinuousDocument(
 std::vector<std::vector<Stroke>> projectContinuousDocumentPages(
     const std::vector<ContinuousDocumentPage>& pages, float pageHeight,
     const std::vector<int>& pageIndices);
+// Split a projected page into ink runs around sorted overlay layer orders.
+// Legacy eraser operations are copied to every affected run.
+std::vector<std::vector<Stroke>> splitStrokesByLayer(
+    const std::vector<Stroke>& strokes, const std::vector<uint64_t>& boundaries);
 }

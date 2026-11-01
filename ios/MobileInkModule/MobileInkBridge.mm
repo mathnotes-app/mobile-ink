@@ -4,6 +4,10 @@
 // Just include our engine which has its own Skia includes
 #include "cpp/SkiaDrawingEngine.h"
 #include "cpp/DrawingSerialization.h"
+#include "cpp/DisplayAppearance.h"
+#include "cpp/PathRenderer.h"
+#include "cpp/EraserMaskOptimization.h"
+#include "cpp/StrokeTilePreparation.h"
 
 // Additional Skia includes for batch export PDF handling
 // Note: SkImages namespace functions are in SkImage.h
@@ -19,6 +23,7 @@
 #pragma clang diagnostic ignored "-Wdocumentation"
 #include <include/gpu/ganesh/GrBackendSurface.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
+#include <include/gpu/ganesh/SkImageGanesh.h>
 #include <include/gpu/ganesh/SkSurfaceGanesh.h>
 #include <include/gpu/ganesh/mtl/GrMtlBackendContext.h>
 #include <include/gpu/ganesh/mtl/GrMtlBackendSurface.h>
@@ -84,16 +89,15 @@ bool deserializeDrawingBytes(
     return serializer.deserialize(buffer, strokes);
 }
 
-void renderWithCpuColorOrdering(nativedrawing::SkiaDrawingEngine* engine, SkCanvas* canvas, bool cropped) {
-    float redBlueSwapMatrix[20] = {
-        0, 0, 1, 0, 0,
-        0, 1, 0, 0, 0,
-        1, 0, 0, 0, 0,
-        0, 0, 0, 1, 0
-    };
-
+void renderWithCpuColorOrdering(nativedrawing::SkiaDrawingEngine* engine, SkCanvas* canvas, bool cropped, bool dark) {
+    if (engine->hasImageLayers()) {
+        engine->setInkDisplayTransform(dark, true);
+        if (cropped) engine->renderVisibleViewport(canvas); else engine->render(canvas);
+        return;
+    }
+    engine->setInkDisplayTransform(false, false);
     SkPaint outputPaint;
-    outputPaint.setColorFilter(SkColorFilters::Matrix(redBlueSwapMatrix));
+    outputPaint.setColorFilter(nativedrawing::makeDisplayColorFilter(dark, true));
     canvas->saveLayer(nullptr, &outputPaint);
     if (cropped) engine->renderVisibleViewport(canvas);
     else engine->render(canvas);
@@ -224,6 +228,110 @@ using namespace nativedrawing;
 
 // C wrapper functions for Swift
 extern "C" {
+void* snapshotZoomTiles(void* engine, float scale, float left, float top, float width, float height) {
+    if (!engine) return nullptr;
+    try { return static_cast<SkiaDrawingEngine*>(engine)->prepareStrokeTiles(scale, left, top, width, height).release(); }
+    catch (...) { NSLog(@"[MobileInk] Could not snapshot zoom tiles"); return nullptr; }
+}
+
+void limitZoomTileContext(void* contextPtr) {
+    if (!contextPtr) return;
+    auto* context = static_cast<sk_sp<GrDirectContext>*>(contextPtr)->get();
+    if (context) context->setResourceCacheLimit(32 * 1024 * 1024);
+}
+
+int prepareNextZoomTile(void* snapshot, void* contextPtr, void* devicePtr, void** outputTexture) {
+    if (!snapshot || !contextPtr || !devicePtr || !outputTexture) return -1;
+    *outputTexture = nullptr;
+    try {
+        auto* context = static_cast<sk_sp<GrDirectContext>*>(contextPtr)->get();
+        auto surface = context ? SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes,
+            SkImageInfo::MakeN32Premul(1, 1)) : nullptr;
+        if (!surface) return -1;
+        auto& batch = *static_cast<StrokeTilePreparation*>(snapshot);
+        sk_sp<SkImage> tile;
+        const int result = SkiaDrawingEngine::renderPreparedStrokeTileImage(batch, surface->getCanvas(), tile);
+        if (result != 1) return result;
+        id<MTLDevice> device = (__bridge id<MTLDevice>)devicePtr;
+        auto descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+            width:batch.ready.width height:batch.ready.height mipmapped:NO];
+        descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        descriptor.storageMode = MTLStorageModePrivate;
+        id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
+        if (!texture) return -1;
+        GrMtlTextureInfo info; info.fTexture.retain((__bridge void*)texture);
+        auto target = GrBackendRenderTargets::MakeMtl(batch.ready.width, batch.ready.height, info);
+        auto destination = SkSurfaces::WrapBackendRenderTarget(context, target, kTopLeft_GrSurfaceOrigin,
+            kBGRA_8888_SkColorType, nullptr, nullptr);
+        if (!destination) return -1;
+        SkPaint copy; copy.setBlendMode(SkBlendMode::kSrc);
+        destination->getCanvas()->drawImage(tile, 0, 0, SkSamplingOptions(), &copy);
+        context->flushAndSubmit(destination.get(), GrSyncCpu::kYes);
+        *outputTexture = (__bridge_retained void*)texture;
+        return 1;
+    } catch (...) { NSLog(@"[MobileInk] Could not prepare a zoom tile"); return -1; }
+}
+
+void releaseZoomTileTexture(void* texture) { if (texture) CFRelease(texture); }
+
+bool installPreparedZoomTile(void* engine, void* snapshot, void* contextPtr, void* texturePtr) {
+    if (!texturePtr) return false;
+    id<MTLTexture> texture = (__bridge_transfer id<MTLTexture>)texturePtr;
+    if (!engine || !snapshot || !contextPtr) return false;
+    try {
+        auto& batch = *static_cast<StrokeTilePreparation*>(snapshot);
+        auto* context = static_cast<sk_sp<GrDirectContext>*>(contextPtr)->get();
+        if (!context || batch.context != context || texture.width != batch.ready.width || texture.height != batch.ready.height) return false;
+        GrMtlTextureInfo info; info.fTexture.retain((__bridge void*)texture);
+        auto backend = GrBackendTextures::MakeMtl(batch.ready.width, batch.ready.height, skgpu::Mipmapped::kNo, info);
+        void* lease = (__bridge_retained void*)texture;
+        auto release = [](void* p) { if (p) CFRelease(p); };
+        batch.pixels = SkImages::BorrowTextureFrom(context, backend, kTopLeft_GrSurfaceOrigin,
+            kBGRA_8888_SkColorType, kPremul_SkAlphaType, nullptr, release, lease);
+        if (!batch.pixels) return false;
+        const bool installed = static_cast<SkiaDrawingEngine*>(engine)->installPreparedStrokeTile(batch);
+        if (!installed) batch.pixels.reset();
+        return installed;
+    }
+    catch (...) { NSLog(@"[MobileInk] Could not install a zoom tile"); return false; }
+}
+
+bool hasPreparedZoomTiles(void* engine, void* snapshot) {
+    if (!engine || !snapshot) return false;
+    try { return static_cast<SkiaDrawingEngine*>(engine)->hasPreparedStrokeTiles(
+        *static_cast<StrokeTilePreparation*>(snapshot)); }
+    catch (...) { NSLog(@"[MobileInk] Could not check prepared zoom tiles"); return false; }
+}
+
+void releaseZoomTileSnapshot(void* snapshot) { delete static_cast<StrokeTilePreparation*>(snapshot); }
+
+void* snapshotEraserMasks(void* engine) {
+    if (!engine) return nullptr;
+    try { return static_cast<SkiaDrawingEngine*>(engine)->snapshotEraserMasks().release(); }
+    catch (...) { NSLog(@"[MobileInk] Could not snapshot eraser masks for optimization"); return nullptr; }
+}
+
+int optimizeNextEraserMask(void* snapshot) {
+    if (!snapshot) return 0;
+    try { return nativedrawing::optimizeNextEraserMask(*static_cast<nativedrawing::EraserMaskOptimizationBatch*>(snapshot)); }
+    catch (...) { NSLog(@"[MobileInk] Could not optimize an eraser mask"); return 0; }
+}
+
+void installOptimizedEraserMask(void* engine, void* snapshot) {
+    if (!engine || !snapshot) return;
+    try {
+        static_cast<SkiaDrawingEngine*>(engine)->installOptimizedEraserMask(
+            *static_cast<nativedrawing::EraserMaskOptimizationBatch*>(snapshot));
+    } catch (...) { NSLog(@"[MobileInk] Could not install an optimized eraser mask"); }
+}
+
+void releaseEraserMaskSnapshot(void* snapshot) {
+    delete static_cast<nativedrawing::EraserMaskOptimizationBatch*>(snapshot);
+}
+void clearEraserMaskCache() { nativedrawing::clearEraserMaskOptimizationCache(); }
+uint64_t reserveDocumentLayerOrder(void* engine) {
+    return engine ? static_cast<SkiaDrawingEngine*>(engine)->reserveLayerOrder() : 0;
+}
 
 void* createDrawingEngine(int width, int height) {
     return new SkiaDrawingEngine(width, height);
@@ -267,6 +375,18 @@ bool updateHoldShapePreview(void* engine, long timestamp) {
     }
 
     return static_cast<SkiaDrawingEngine*>(engine)->updateHoldShapePreview(timestamp);
+}
+
+void setHoldToShapeEnabled(void* engine, bool enabled) {
+    if (engine) static_cast<SkiaDrawingEngine*>(engine)->setHoldToShapeEnabled(enabled);
+}
+
+void warmCrayonTextures() {
+    nativedrawing::PathRenderer::warmCrayonTextures();
+}
+
+void setViewportMotionActive(void* engine, bool active) {
+    if (engine) static_cast<SkiaDrawingEngine*>(engine)->setViewportMotionActive(active);
 }
 
 // Predictive touch support for Apple Pencil low-latency rendering
@@ -380,16 +500,44 @@ bool isEmpty(void* engine) {
 
 void renderToCanvas(void* engine, void* canvas) {
     if (engine && canvas) {
-        static_cast<SkiaDrawingEngine*>(engine)->render(static_cast<SkCanvas*>(canvas));
+        auto* drawing = static_cast<SkiaDrawingEngine*>(engine);
+        drawing->setInkDisplayTransform(false, false);
+        drawing->render(static_cast<SkCanvas*>(canvas));
     }
 }
 
 void renderVisibleViewportToCanvas(void* engine, void* canvas) {
-    if (engine && canvas) static_cast<SkiaDrawingEngine*>(engine)->renderVisibleViewport(static_cast<SkCanvas*>(canvas));
+    if (engine && canvas) {
+        auto* drawing = static_cast<SkiaDrawingEngine*>(engine);
+        drawing->setInkDisplayTransform(false, false);
+        drawing->renderVisibleViewport(static_cast<SkCanvas*>(canvas));
+    }
+}
+
+void renderToDisplayCanvas(void* engine, void* canvas, bool cropped, bool dark) {
+    if (!engine || !canvas) return;
+    auto* target = static_cast<SkCanvas*>(canvas);
+    auto* drawing = static_cast<SkiaDrawingEngine*>(engine);
+    if (drawing->hasImageLayers()) {
+        drawing->setInkDisplayTransform(dark, false);
+        if (cropped) drawing->renderVisibleViewport(target); else drawing->render(target);
+        return;
+    }
+    drawing->setInkDisplayTransform(false, false);
+    SkPaint paint;
+    paint.setColorFilter(nativedrawing::makeDisplayColorFilter(dark, false));
+    if (dark) target->saveLayer(nullptr, &paint);
+    if (cropped) drawing->renderVisibleViewport(target);
+    else drawing->render(target);
+    if (dark) target->restore();
 }
 
 void renderToCanvasForExport(void* engine, void* canvas) {
-    if (engine && canvas) static_cast<SkiaDrawingEngine*>(engine)->renderForExport(static_cast<SkCanvas*>(canvas));
+    if (engine && canvas) {
+        auto* drawing = static_cast<SkiaDrawingEngine*>(engine);
+        drawing->setInkDisplayTransform(false, false);
+        drawing->renderForExport(static_cast<SkCanvas*>(canvas));
+    }
 }
 
 void setRenderViewport(
@@ -444,7 +592,7 @@ void destroyGaneshMetalContext(void* contextPtr) {
     delete contextHandle;
 }
 
-bool renderToGaneshMetalTexture(void* engine, void* contextPtr, void* texturePtr, int width, int height, bool cropped) {
+bool renderToGaneshMetalTextureForDisplay(void* engine, void* contextPtr, void* texturePtr, int width, int height, bool cropped, bool dark) {
     if (!engine || !contextPtr || !texturePtr || width <= 0 || height <= 0) {
         return false;
     }
@@ -478,9 +626,13 @@ bool renderToGaneshMetalTexture(void* engine, void* contextPtr, void* texturePtr
 
     SkCanvas* canvas = surface->getCanvas();
     canvas->clear(SK_ColorTRANSPARENT);
-    renderWithCpuColorOrdering(static_cast<SkiaDrawingEngine*>(engine), canvas, cropped);
+    renderWithCpuColorOrdering(static_cast<SkiaDrawingEngine*>(engine), canvas, cropped, dark);
     directContext->flushAndSubmit(surface.get());
     return true;
+}
+
+bool renderToGaneshMetalTexture(void* engine, void* contextPtr, void* texturePtr, int width, int height, bool cropped) {
+    return renderToGaneshMetalTextureForDisplay(engine, contextPtr, texturePtr, width, height, cropped, false);
 }
 
 void* createSkiaCanvas(void* pixels, int width, int height, int rowBytes) {
@@ -559,6 +711,12 @@ void finalizeMove(void* engine) {
     }
 }
 
+void cancelSelectionMove(void* engine) {
+    if (engine) {
+        static_cast<SkiaDrawingEngine*>(engine)->endSelectionDrag();
+    }
+}
+
 void beginSelectionTransform(void* engine, int handleIndex) {
     if (engine) {
         static_cast<SkiaDrawingEngine*>(engine)->beginSelectionTransform(handleIndex);
@@ -624,6 +782,17 @@ void* snapshotDrawing(void* engine) {
         return new std::vector<nativedrawing::Stroke>(
             static_cast<SkiaDrawingEngine*>(engine)->snapshotDrawing());
     } catch (...) { return nullptr; }
+}
+
+// The caller owns the vector before and after this swap. It can release the
+// previous drawing off-thread after the main-thread handoff completes.
+bool replaceDrawingSnapshot(void* engine, void* snapshot) {
+    if (!engine || !snapshot) return false;
+    try {
+        static_cast<SkiaDrawingEngine*>(engine)->replaceDrawing(
+            *static_cast<std::vector<nativedrawing::Stroke>*>(snapshot));
+        return true;
+    } catch (...) { return false; }
 }
 
 uint8_t* serializeDrawingSnapshot(void* snapshot, int* outSize) {

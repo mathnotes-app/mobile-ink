@@ -53,17 +53,266 @@ enum PencilStrokeInputNormalizer {
 
 // MARK: - MobileInkCanvasView
 
+private final class ImageLayerWorkToken {
+    private let lock = NSLock()
+    private var cancelled = false
+    func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+    var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+}
+
+private final class ImageAnimationTarget: NSObject {
+    weak var view: MobileInkCanvasView?
+    @objc func tick(_ link: CADisplayLink) { view?.advanceAnimatedImageLayers(at: link.timestamp) }
+}
+
 @objc(MobileInkCanvasView)
 class MobileInkCanvasView: MTKView {
+    private static let warmCrayonTextureCache: Void = {
+        DispatchQueue.global(qos: .utility).async { warmCrayonTextures() }
+    }()
+    private static let imageLayerQueue = DispatchQueue(label: "MobileInk.imageLayers", qos: .userInitiated)
+    private static let eraserMaskQueue = DispatchQueue(label: "MobileInk.eraserMasks", qos: .utility)
+    private static let imageCacheMemoryObserver = NotificationCenter.default.addObserver(
+        forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil
+    ) { _ in clearDocumentImageCache(); clearEraserMaskCache(); MobileInkZoomTileWorker.clear() }
     var drawingEngine: OpaquePointer?
+    private var imageLayerRevision: UInt64 = 0
+    private var imageLayerWork: ImageLayerWorkToken?
+    private var pendingImageLayers: UnsafeMutableRawPointer?
+    private var pendingImageLayersJSON: String?
+    private var imageAnimationLink: CADisplayLink?
+    private var imageAnimationTarget: ImageAnimationTarget?
+    private var imageFrameUpdatePending = false
+    private var eraserMaskRevision: UInt64 = 0
+    private var eraserMaskInFlight = false
+    private var eraserMaskRestart = false
+    private var eraserMaskScheduled: DispatchWorkItem?
+    @objc var onImageLayersError: RCTDirectEventBlock?
+    @objc var onImageLayersReady: RCTDirectEventBlock?
+    @objc var onZoomPreparationReady: RCTDirectEventBlock?
+    private var zoomPreparationRevision: UInt64 = 0
+    private var zoomPreparationInFlight = false
+    private var zoomPreparationScheduled: DispatchWorkItem?
+    @objc var zoomPreparationTarget: String? {
+        didSet {
+            guard oldValue != zoomPreparationTarget else { return }
+            zoomPreparationRevision &+= 1
+            scheduleZoomPreparation()
+        }
+    }
+
+    private func scheduleZoomPreparation() {
+        zoomPreparationScheduled?.cancel()
+        let revision = zoomPreparationRevision
+        let work = DispatchWorkItem { [weak self] in self?.startZoomPreparation(revision) }
+        zoomPreparationScheduled = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
+    }
+
+    private func startZoomPreparation(_ revision: UInt64) {
+        guard !isReleased, continuousDocument, useExperimentalGaneshBackend, hasPresentedFrame,
+              activeStrokeTool == nil, !isMovingSelection, !isTransformingSelection, !isDraggingSelection,
+              revision == zoomPreparationRevision, !zoomPreparationInFlight,
+              let engine = drawingEngine, let json = zoomPreparationTarget,
+              let data = json.data(using: .utf8),
+              let target = try? JSONSerialization.jsonObject(with: data) as? [String: Double],
+              let scale = target["renderScale"], let left = target["leftRatio"], let top = target["topRatio"],
+              let width = target["widthRatio"], let height = target["heightRatio"],
+              [scale, left, top, width, height].allSatisfy({ $0.isFinite }),
+              scale >= 0.25, scale <= 5, left >= 0, top >= 0, width > 0, height > 0,
+              left + width <= 1.000001, top + height <= 1.000001 else { return }
+        guard let snapshot = snapshotZoomTiles(engine, Float(scale), Float(left * Double(enginePixelWidth)),
+            Float(top * Double(enginePixelHeight)), Float(width * Double(enginePixelWidth)),
+            Float(height * Double(enginePixelHeight))) else { return }
+        if hasPreparedZoomTiles(engine, snapshot) {
+            releaseZoomTileSnapshot(snapshot)
+            onZoomPreparationReady?(["json": json])
+            return
+        }
+        zoomPreparationInFlight = true
+        advanceZoomPreparation(snapshot, revision: revision, json: json)
+    }
+
+    private func advanceZoomPreparation(_ snapshot: UnsafeMutableRawPointer, revision: UInt64, json: String) {
+        MobileInkZoomTileWorker.render(snapshot) { [weak self] result, texture in
+            guard let self else {
+                if let texture { releaseZoomTileTexture(texture) }
+                releaseZoomTileSnapshot(snapshot)
+                return
+            }
+            if self.activeStrokeTool != nil || self.isMovingSelection || self.isTransformingSelection || self.isDraggingSelection {
+                if let texture { releaseZoomTileTexture(texture) }
+                releaseZoomTileSnapshot(snapshot)
+                self.zoomPreparationInFlight = false
+                return
+            }
+            guard !self.isReleased, let engine = self.drawingEngine,
+                  revision == self.zoomPreparationRevision else {
+                if let texture { releaseZoomTileTexture(texture) }
+                releaseZoomTileSnapshot(snapshot)
+                self.zoomPreparationInFlight = false
+                if !self.isReleased { self.scheduleZoomPreparation() }
+                return
+            }
+            if result == 1, let texture, let context = self.ganeshMetalContext,
+               installPreparedZoomTile(engine, snapshot, context, texture) {
+                self.advanceZoomPreparation(snapshot, revision: revision, json: json)
+                return
+            }
+            if let texture, (result != 1 || self.ganeshMetalContext == nil) { releaseZoomTileTexture(texture) }
+            let ready = result == 0 && hasPreparedZoomTiles(engine, snapshot)
+            releaseZoomTileSnapshot(snapshot)
+            self.zoomPreparationInFlight = false
+            if ready { self.onZoomPreparationReady?(["json": json]) }
+            else if result >= 0 { self.scheduleZoomPreparation() }
+        }
+    }
+    @objc var documentImageLayersJSON: String? {
+        didSet {
+            guard oldValue != documentImageLayersJSON, !isReleased else { return }
+            scheduleImageLayersPreparation(documentImageLayersJSON ?? "[]")
+        }
+    }
+
+    private func scheduleImageLayersPreparation(_ json: String) {
+        imageLayerWork?.cancel()
+        let work = ImageLayerWorkToken()
+        imageLayerWork = work
+        imageLayerRevision &+= 1
+        let revision = imageLayerRevision
+        let scale = Double(baseContentScale())
+        Self.imageLayerQueue.async { [weak self] in
+            guard !work.isCancelled else { return }
+            let prepared = json.withCString { prepareDocumentImageLayers($0, scale) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isReleased, self.imageLayerRevision == revision else {
+                    if let prepared { releaseDocumentImageLayers(prepared) }
+                    return
+                }
+                guard let prepared else {
+                    self.onImageLayersError?(["message": "Unable to load an inserted image"])
+                    return
+                }
+                if let pending = self.pendingImageLayers { releaseDocumentImageLayers(pending) }
+                self.pendingImageLayers = prepared
+                self.pendingImageLayersJSON = json
+                self.installPendingImageLayers()
+            }
+        }
+    }
+
+    // Optimize copies away from the input/render thread. Each result is
+    // validated against current stroke geometry before it can be installed.
+    private func scheduleEraserMaskOptimization() {
+        eraserMaskRevision &+= 1
+        let revision = eraserMaskRevision
+        eraserMaskScheduled?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.startEraserMaskOptimization(revision) }
+        eraserMaskScheduled = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75, execute: work)
+    }
+
+    private func startEraserMaskOptimization(_ revision: UInt64) {
+        guard !isReleased, revision == eraserMaskRevision else { return }
+        if eraserMaskInFlight { eraserMaskRestart = true; return }
+        guard let engine = drawingEngine, let snapshot = snapshotEraserMasks(engine) else { return }
+        eraserMaskInFlight = true
+        advanceEraserMaskOptimization(snapshot, revision: revision)
+    }
+
+    private func advanceEraserMaskOptimization(_ snapshot: UnsafeMutableRawPointer, revision: UInt64) {
+        Self.eraserMaskQueue.async { [weak self] in
+            let result = optimizeNextEraserMask(snapshot)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { releaseEraserMaskSnapshot(snapshot); return }
+                guard !self.isReleased, revision == self.eraserMaskRevision,
+                      let engine = self.drawingEngine, result != 0 else {
+                    releaseEraserMaskSnapshot(snapshot)
+                    self.eraserMaskInFlight = false
+                    if !self.isReleased && self.eraserMaskRestart {
+                        self.eraserMaskRestart = false
+                        self.startEraserMaskOptimization(self.eraserMaskRevision)
+                    }
+                    return
+                }
+                if result == 1 { installOptimizedEraserMask(engine, snapshot) }
+                self.advanceEraserMaskOptimization(snapshot, revision: revision)
+            }
+        }
+    }
+
+    private func installPendingImageLayers() {
+        guard let engine = drawingEngine, let prepared = pendingImageLayers else { return }
+        pendingImageLayers = nil
+        let animated = documentImageLayersAreAnimated(prepared)
+        installDocumentImageLayers(engine, prepared)
+        releaseDocumentImageLayers(prepared)
+        updateImageAnimationLink(animated)
+        requestDisplay(forceWhenSuspended: true)
+        if let json = pendingImageLayersJSON { onImageLayersReady?(["json": json]) }
+        pendingImageLayersJSON = nil
+    }
+
+    private func updateImageAnimationLink(_ enabled: Bool) {
+        if !enabled || isReleased {
+            imageAnimationLink?.invalidate()
+            imageAnimationLink = nil
+            imageAnimationTarget = nil
+        } else if imageAnimationLink == nil {
+            let target = ImageAnimationTarget()
+            target.view = self
+            let link = CADisplayLink(target: target, selector: #selector(ImageAnimationTarget.tick(_:)))
+            link.preferredFramesPerSecond = 60
+            link.add(to: .main, forMode: .common)
+            imageAnimationTarget = target
+            imageAnimationLink = link
+        }
+    }
+
+    fileprivate func advanceAnimatedImageLayers(at time: CFTimeInterval) {
+        guard !isReleased, window != nil, UIApplication.shared.applicationState == .active,
+              !imageFrameUpdatePending, let engine = drawingEngine,
+              let snapshot = snapshotDocumentImageLayers(engine) else { return }
+        imageFrameUpdatePending = true
+        let revision = imageLayerRevision
+        Self.imageLayerQueue.async { [weak self] in
+            let result = advanceDocumentImageLayers(snapshot, time)
+            DispatchQueue.main.async { [weak self] in
+                defer { releaseDocumentImageLayers(snapshot) }
+                guard let self else { return }
+                self.imageFrameUpdatePending = false
+                guard !self.isReleased, revision == self.imageLayerRevision, let engine = self.drawingEngine else { return }
+                if result < 0 {
+                    self.updateImageAnimationLink(false)
+                    self.onImageLayersError?(["message": "Unable to decode an animated image frame"])
+                } else if result > 0 {
+                    installAnimatedDocumentImageLayers(engine, snapshot)
+                    self.requestDisplay(forceWhenSuspended: true)
+                }
+            }
+        }
+    }
     private var commandQueue: MTLCommandQueue?
     private var ganeshMetalContext: OpaquePointer?
+    private var ganeshPreparationAttempted = false
+    private var ganeshPreparationPending = false
+    private var ganeshFrameFailed = false
+    private var ganeshPreparationRequest: MobileInkGaneshPreparation.Request?
+    private var hasPresentedFrame = false
+    private let frameAcquisition = MobileInkFrameAcquisition<CAMetalDrawable>()
+    private var hasPendingFrame = false
+    private var isFrameScheduled = false
+    private var pendingFrameRequestedAt: CFTimeInterval?
     var requestedRenderBackend: MobileInkRenderBackend = .ganesh
-    var benchmarkRecorder = MobileInkBenchmarkRecorder()
+    var darkDisplay = false {
+        didSet { if oldValue != darkDisplay { requestDisplay() } }
+    }
+    let benchmarkRecorder: MobileInkBenchmarkRecorder
+    private let interactionAudit: MobileInkInteractionAudit?
     var isBenchmarkReplayRunning = false
     var benchmarkRunToken = UUID()
     private var useExperimentalGaneshBackend: Bool {
-        requestedRenderBackend == .ganesh
+        requestedRenderBackend == .ganesh && !ganeshFrameFailed
     }
     var scaleX: CGFloat = 1.0
     var scaleY: CGFloat = 1.0
@@ -76,16 +325,21 @@ class MobileInkCanvasView: MTKView {
     private var enginePixelHeight: Int32 = 0
     private var isApplyingDrawableSize = false
     private var clampedRenderScale: CGFloat {
-        let requested = max(1.0, min(5.0, renderScale.isFinite ? renderScale : 1.0))
-        return [CGFloat(1), 1.5, 2, 2.5, 3, 4, 5].min { abs($0 - requested) < abs($1 - requested) } ?? 1
+        let requested = max(0.25, min(5.0, renderScale.isFinite ? renderScale : 1.0))
+        return [CGFloat(0.25), 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5].min { abs($0 - requested) < abs($1 - requested) } ?? 1
     }
 
     private var documentSize: CGSize = .zero
+    private var targetRenderFrame: CGRect = .zero
+    private var targetRenderScale: CGFloat = 0
+    private var renderGeometryRevision: UInt64 = 0
     private var renderGeometryUpdatePending = false
-    private var usesCroppedViewport: Bool { continuousDocument || clampedRenderScale > 1.01 }
+    private var usesCroppedViewport: Bool { continuousDocument || abs(clampedRenderScale - 1) > 0.01 }
 
     func updateDocumentLayout(_ size: CGSize) {
-        guard size.width > 0, size.height > 0 else { return }
+        let scale = baseContentScale()
+        guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0,
+              size.width * scale <= CGFloat(Int32.max), size.height * scale <= CGFloat(Int32.max) else { return }
         documentSize = size
         scheduleRenderGeometryUpdate()
     }
@@ -116,16 +370,69 @@ class MobileInkCanvasView: MTKView {
                 target.size.width = min(target.width, maxSide)
                 target.size.height = min(target.height, maxSide)
             }
-            if self.frame != target { self.frame = target }
-            self.applyDrawableContentScale(updateDrawableSize: true)
+            if self.targetRenderFrame != target || self.targetRenderScale != self.clampedRenderScale {
+                self.targetRenderFrame = target
+                self.targetRenderScale = self.clampedRenderScale
+                self.renderGeometryRevision &+= 1
+            }
+            // Keep the previously presented ink aligned with its old crop
+            // until the new crop is rendered and can be swapped atomically.
+            if !self.continuousDocument || !self.hasPresentedFrame { self.frame = target }
+            self.applyDrawableContentScale(updateDrawableSize: true, targetSize: target.size)
+            self.syncContinuousEngineDocumentSize()
             self.applyRenderViewportToEngine()
             self.updateSelectionToolbarFrame()
             self.requestDisplay(forceWhenSuspended: true)
         }
     }
 
+    // A growing document can keep exactly the same cropped drawable size.
+    // In that case MTKView does not call drawableSizeWillChange, so update
+    // the logical engine extent directly from the host document layout.
+    private func syncContinuousEngineDocumentSize() {
+        guard continuousDocument, let engine = drawingEngine,
+              documentSize.width > 0, documentSize.height > 0 else { return }
+        let scale = baseContentScale()
+        let width = Int32(max(1, round(documentSize.width * scale)))
+        let height = Int32(max(1, round(documentSize.height * scale)))
+        guard width != enginePixelWidth || height != enginePixelHeight else { return }
+        if resizeContinuousDrawingEngine(engine, width, height) {
+            enginePixelWidth = width
+            enginePixelHeight = height
+        }
+    }
+
     // Store pending tool settings to apply when engine is ready
     private var pendingTool: String = "pen"
+    private var activeStrokeTool: String?
+    var holdToShapeEnabled = true {
+        didSet {
+            if !holdToShapeEnabled { cancelHoldToShapePreview() }
+            if let engine = drawingEngine { setHoldToShapeEnabled(engine, holdToShapeEnabled); requestDisplay() }
+        }
+    }
+    private var pendingViewportQualityRefresh: DispatchWorkItem?
+    var viewportMotionActive = false {
+        didSet {
+            guard oldValue != viewportMotionActive else { return }
+            pendingViewportQualityRefresh?.cancel()
+            pendingViewportQualityRefresh = nil
+            if viewportMotionActive {
+                if let engine = drawingEngine { setViewportMotionActive(engine, true) }
+            } else {
+                // Rapid consecutive pinches should not rebuild high-resolution
+                // tiles between gestures. Sharpen once the viewport stays idle.
+                let refresh = DispatchWorkItem { [weak self] in
+                    guard let self, !self.isReleased, !self.viewportMotionActive,
+                          let engine = self.drawingEngine else { return }
+                    setViewportMotionActive(engine, false)
+                    self.requestDisplay(forceWhenSuspended: true)
+                }
+                pendingViewportQualityRefresh = refresh
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: refresh)
+            }
+        }
+    }
     private var pendingWidth: Float = 3.0
     private var pendingColor: UInt32 = 0xFF000000  // Black
     private var pendingEraserMode: String = "pixel"
@@ -160,8 +467,12 @@ class MobileInkCanvasView: MTKView {
     @objc var drawingPolicy: String = "default"
     @objc var renderBackend: String = MobileInkRenderBackend.ganesh.rawValue {
         didSet {
+            guard !isReleased else { return }
             let normalizedBackend = MobileInkRenderBackend(rawValue: renderBackend.lowercased()) ?? .ganesh
             requestedRenderBackend = normalizedBackend
+            benchmarkRecorder.updateRequestedBackend(normalizedBackend.rawValue)
+            interactionAudit?.updateRequestedBackend(normalizedBackend.rawValue)
+            if normalizedBackend == .ganesh { _ = ensureGaneshMetalContext() }
 
             if normalizedBackend == .cpu {
                 if pixelWidth > 0 && pixelHeight > 0 {
@@ -252,13 +563,21 @@ class MobileInkCanvasView: MTKView {
     private var pageHeight: CGFloat = 0
 
     override init(frame: CGRect, device: MTLDevice?) {
+        // Start before Metal/view construction so the audit includes cold-open
+        // work, rather than beginning only once the first frame is ready.
+        let recorder = MobileInkBenchmarkRecorder()
+        self.benchmarkRecorder = recorder
+        self.interactionAudit = MobileInkInteractionAudit(recorder: recorder)
         let metalDevice = device ?? MTLCreateSystemDefaultDevice()
         super.init(frame: frame, device: metalDevice)
+
+        _ = Self.warmCrayonTextureCache
+        _ = Self.imageCacheMemoryObserver
 
         self.isOpaque = false // Transparent to show background underneath
         self.backgroundColor = .clear
         self.framebufferOnly = false
-        self.enableSetNeedsDisplay = true
+        self.enableSetNeedsDisplay = false
         self.isPaused = true
         self.preferredFramesPerSecond = 120
 
@@ -337,6 +656,25 @@ class MobileInkCanvasView: MTKView {
     func releaseHeavyNativeState() {
         if isReleased { return }
         isReleased = true
+        eraserMaskRevision &+= 1
+        eraserMaskScheduled?.cancel()
+        eraserMaskScheduled = nil
+        eraserMaskRestart = false
+        updateImageAnimationLink(false)
+        imageLayerWork?.cancel()
+        imageLayerWork = nil
+        imageLayerRevision &+= 1
+        if let pending = pendingImageLayers { releaseDocumentImageLayers(pending); pendingImageLayers = nil }
+        pendingImageLayersJSON = nil
+        frameAcquisition.cancel()
+        hasPendingFrame = false
+        pendingFrameRequestedAt = nil
+        ganeshPreparationRequest?.cancel()
+        ganeshPreparationRequest = nil
+        if let audit = interactionAudit {
+            if Thread.isMainThread { audit.dispose() }
+            else { DispatchQueue.main.async { audit.dispose() } }
+        }
 
         benchmarkRunToken = UUID()
         isBenchmarkReplayRunning = false
@@ -351,14 +689,14 @@ class MobileInkCanvasView: MTKView {
             drawingEngine = nil
         }
         if let context = ganeshMetalContext {
-            destroyGaneshMetalContext(context)
             ganeshMetalContext = nil
+            MobileInkGaneshPreparation.discard(context)
         }
-        // Drop any queued JS callbacks waiting for a Metal frame that
-        // will never come now that we're off-screen. Without this they
-        // pin the bridge callback closures until the MTKView eventually
-        // releases (sometime later, never on a heavy session).
+        // Settle loads waiting for a frame, including background preparation.
+        // Dropping the native block alone leaves its JavaScript promise pending.
+        let cancelledLoads = pendingPresentedLoadCallbacks
         pendingPresentedLoadCallbacks.removeAll()
+        cancelledLoads.forEach { $0(["Canvas released before load presentation", NSNull()]) }
         deferredBase64Payload = nil
         hasDeferredPresentation = false
         onDrawingChange = nil
@@ -426,6 +764,8 @@ class MobileInkCanvasView: MTKView {
                 guard let self = self, self.window == nil else { return }
                 self.releaseHeavyNativeState()
             }
+        } else if hasPendingFrame {
+            requestDisplay(forceWhenSuspended: true)
         }
     }
 
@@ -441,7 +781,7 @@ class MobileInkCanvasView: MTKView {
         window?.screen.scale ?? UIScreen.main.scale
     }
 
-    private func applyDrawableContentScale(updateDrawableSize: Bool) {
+    private func applyDrawableContentScale(updateDrawableSize: Bool, targetSize: CGSize? = nil) {
         let targetScale = baseContentScale() * clampedRenderScale
         if abs(contentScaleFactor - targetScale) > 0.001 {
             contentScaleFactor = targetScale
@@ -449,13 +789,14 @@ class MobileInkCanvasView: MTKView {
         if abs(layer.contentsScale - targetScale) > 0.001 {
             layer.contentsScale = targetScale
         }
-        guard updateDrawableSize, !isApplyingDrawableSize, bounds.width > 0, bounds.height > 0 else {
+        let size = targetSize ?? bounds.size
+        guard updateDrawableSize, !isApplyingDrawableSize, size.width > 0, size.height > 0 else {
             return
         }
 
         let targetDrawableSize = CGSize(
-            width: max(1.0, round(bounds.width * targetScale)),
-            height: max(1.0, round(bounds.height * targetScale))
+            width: max(1.0, round(size.width * targetScale)),
+            height: max(1.0, round(size.height * targetScale))
         )
         if abs(drawableSize.width - targetDrawableSize.width) > 0.5 ||
             abs(drawableSize.height - targetDrawableSize.height) > 0.5 {
@@ -478,26 +819,37 @@ class MobileInkCanvasView: MTKView {
         let width = min(CGFloat(enginePixelWidth) - left, widthRatio * CGFloat(enginePixelWidth))
         let height = min(CGFloat(enginePixelHeight) - top, heightRatio * CGFloat(enginePixelHeight))
 
+        let renderFrame = continuousDocument && !targetRenderFrame.isEmpty ? targetRenderFrame : frame
         setRenderViewport(
             engine,
             Float(actualRenderScale),
-            Float(continuousDocument ? frame.minX * baseContentScale() : left),
-            Float(continuousDocument ? frame.minY * baseContentScale() : top),
-            Float(max(1.0, continuousDocument ? frame.width * baseContentScale() : width)),
-            Float(max(1.0, continuousDocument ? frame.height * baseContentScale() : height))
+            Float(continuousDocument ? renderFrame.minX * baseContentScale() : left),
+            Float(continuousDocument ? renderFrame.minY * baseContentScale() : top),
+            Float(max(1.0, continuousDocument ? renderFrame.width * baseContentScale() : width)),
+            Float(max(1.0, continuousDocument ? renderFrame.height * baseContentScale() : height))
         )
     }
 
     func requestDisplay(forceWhenSuspended: Bool = false) {
+        guard !isReleased else { return }
         if renderSuspended && !forceWhenSuspended {
             return
         }
+        hasPendingFrame = true
 
-        // Ink invalidation does not invalidate the separate paper/PDF view.
-        // Its content setters and UIView layout own background invalidation.
-        // In particular, zoom/viewport changes must not rerasterize a PDF
-        // on the main thread merely to present a sharper ink surface.
-        setNeedsDisplay()
+        // Acquisition is asynchronous, so own the on-demand frame loop rather
+        // than returning from an MTKView display callback before submission.
+        // Coalesce updates in this UI transaction without adding a display-cycle
+        // wait. The acquisition gate serializes encoding; Metal owns submitted frames.
+        // Paper/PDF invalidation remains owned by the separate background view.
+        guard !isFrameScheduled else { return }
+        isFrameScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isFrameScheduled = false
+            guard self.hasPendingFrame else { return }
+            self.draw(in: self)
+        }
     }
 
     private func setupSelectionToolbar() {
@@ -748,7 +1100,6 @@ class MobileInkCanvasView: MTKView {
         guard let engine = drawingEngine, let touch = touches.first else { return }
 
         let location = touch.location(in: superview ?? self)
-        currentTouchLocation = location
         let scaledX = Float(location.x * scaleX)
         let scaledY = Float(location.y * scaleY)
 
@@ -762,6 +1113,7 @@ class MobileInkCanvasView: MTKView {
             return
         }
 
+        currentTouchLocation = location
         // Update eraser cursor position
         updateEraserCursor(at: location, width: pendingWidth)
 
@@ -806,6 +1158,7 @@ class MobileInkCanvasView: MTKView {
             requestDisplay()
         } else {
             // Normal drawing mode
+            activeStrokeTool = pendingTool
             let pressure = normalizedPressure(for: touch)
             let (azimuth, altitude) = extractAzimuthAndAltitude(for: touch)
             let isPencilInput = PencilStrokeInputNormalizer.isPencil(touch)
@@ -913,6 +1266,7 @@ class MobileInkCanvasView: MTKView {
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let engine = drawingEngine, let touch = touches.first else { return }
+        defer { if viewportMotionActive && activeStrokeTool == nil { scheduleZoomPreparation() } }
 
         // Don't process touches when in text mode
         if isTextMode {
@@ -946,6 +1300,7 @@ class MobileInkCanvasView: MTKView {
             requestDisplay()
             notifySelectionChange()
             if didTransformSelection {
+                scheduleEraserMaskOptimization()
                 onDrawingChange?([:])
             }
         } else if isMovingSelection {
@@ -964,6 +1319,7 @@ class MobileInkCanvasView: MTKView {
             requestDisplay()
             notifySelectionChange()
             if didMoveSelection {
+                scheduleEraserMaskOptimization()
                 onDrawingChange?([:])
             }
         } else if isSelectionMode && isDraggingSelection {
@@ -985,12 +1341,21 @@ class MobileInkCanvasView: MTKView {
             touchEnded(engine, currentUptimeTimestampMillis())
             recordBenchmarkInputSample()
             requestDisplay()
-            onDrawingChange?([:])
+            let completedTool = activeStrokeTool
+            activeStrokeTool = nil
+            if completedTool == "eraser" && pendingEraserMode == "pixel" {
+                scheduleEraserMaskOptimization()
+            }
+            if let completedTool { onDrawingChange?(["completedStrokeTool": completedTool]) }
+            else { onDrawingChange?([:]) }
         }
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let engine = drawingEngine, let touch = touches.first else { return }
+        defer { if viewportMotionActive && activeStrokeTool == nil { scheduleZoomPreparation() } }
+        let cancelledTool = activeStrokeTool
+        activeStrokeTool = nil
 
         // Filter touches based on drawing policy
         if shouldIgnoreTouchForDrawingPolicy(touch) {
@@ -1013,14 +1378,20 @@ class MobileInkCanvasView: MTKView {
             notifySelectionChange()
         } else if isSelectionMode || isMovingSelection {
             // Cancel selection drag or move
+            if isMovingSelection { cancelSelectionMove(engine) }
             isDraggingSelection = false
             isMovingSelection = false
             hasSelectionMoveDelta = false
             lastDragPoint = nil
+            requestDisplay()
+            notifySelectionChange()
         } else {
             // Normal drawing mode
             clearPredictedPoints(engine)  // Clear predictions before cancelling
             touchEnded(engine, 0)
+            if cancelledTool == "eraser" && pendingEraserMode == "pixel" {
+                scheduleEraserMaskOptimization()
+            }
             requestDisplay()
             onDrawingChange?([:])
         }
@@ -1056,6 +1427,7 @@ class MobileInkCanvasView: MTKView {
         let hadSelection = getSelectionCount(engine) > 0
         let external = undoExternalEdit(engine)
         endSelectionInteractionAfterHistoryChange(hadSelection: hadSelection)
+        scheduleEraserMaskOptimization()
         requestDisplay()
         if let external {
             let payload = String(cString: external)
@@ -1071,6 +1443,7 @@ class MobileInkCanvasView: MTKView {
         let hadSelection = getSelectionCount(engine) > 0
         let external = redoExternalEdit(engine)
         endSelectionInteractionAfterHistoryChange(hadSelection: hadSelection)
+        scheduleEraserMaskOptimization()
         requestDisplay()
         if let external {
             let payload = String(cString: external)
@@ -1205,6 +1578,27 @@ class MobileInkCanvasView: MTKView {
         requestDisplay(forceWhenSuspended: true)
     }
 
+    // Used only by the document bridge, which validates and builds geometry on
+    // its background queue. The pointer is borrowed for this synchronous swap.
+    func loadPreparedDrawing(_ snapshot: UnsafeMutableRawPointer, callback: @escaping RCTResponseSenderBlock) {
+        guard let engine = drawingEngine, !isReleased else {
+            callback([NSNull(), false])
+            return
+        }
+        guard replaceDrawingSnapshot(engine, snapshot) else {
+            callback(["Failed to install prepared drawing", NSNull()])
+            return
+        }
+        deferredBase64Payload = nil
+        hasDeferredPresentation = false
+        syncInteractionModeFlags()
+        resetTransientInteractionState()
+        applyPendingTool(to: engine)
+        notifySelectionChange()
+        enqueueLoadPresentationCallback(callback)
+        scheduleEraserMaskOptimization()
+    }
+
     @objc func loadBase64Data(_ base64String: String, callback: @escaping RCTResponseSenderBlock) {
         // React attaches the native view before its first layout creates the
         // engine. Report retryable readiness without treating valid ink as bad.
@@ -1220,6 +1614,7 @@ class MobileInkCanvasView: MTKView {
 
         hasDeferredPresentation = false
         enqueueLoadPresentationCallback(callback)
+        scheduleEraserMaskOptimization()
     }
 
     @objc func stageBase64Data(_ base64String: String, callback: @escaping RCTResponseSenderBlock) {
@@ -1246,6 +1641,7 @@ class MobileInkCanvasView: MTKView {
         }
 
         enqueueLoadPresentationCallback(callback)
+        scheduleEraserMaskOptimization()
     }
 
     private func applyBase64Data(_ base64String: String) -> String? {
@@ -1311,6 +1707,10 @@ class MobileInkCanvasView: MTKView {
     }
 
     func resetTransientInteractionState() {
+        if let engine = drawingEngine {
+            if isMovingSelection { cancelSelectionMove(engine) }
+            if isTransformingSelection { cancelSelectionTransform(engine) }
+        }
         isDraggingSelection = false
         isMovingSelection = false
         isTransformingSelection = false
@@ -1318,6 +1718,7 @@ class MobileInkCanvasView: MTKView {
         hasSelectionMoveDelta = false
         isHoldToShapeStrokeActive = false
         lastDragPoint = nil
+        currentTouchLocation = nil
         // Hide the eraser cursor overlay so a pooled view reassigned to a new
         // page doesn't keep showing a stale cursor circle.
         updateEraserCursor(at: nil, width: 0)
@@ -1636,6 +2037,11 @@ class MobileInkCanvasView: MTKView {
             return
         }
 
+        if pendingImageLayers != nil { installPendingImageLayers() }
+        else if let json = documentImageLayersJSON { scheduleImageLayersPreparation(json) }
+
+        setHoldToShapeEnabled(engine, holdToShapeEnabled)
+        setViewportMotionActive(engine, viewportMotionActive)
         applyPendingBackgroundType(to: engine)
         applyRenderViewportToEngine()
 
@@ -1801,17 +2207,26 @@ extension MobileInkCanvasView: MTKViewDelegate {
             return context
         }
 
-        guard let device = device, let commandQueue = commandQueue else {
+        guard !ganeshPreparationAttempted, !isReleased,
+              let device = device, let commandQueue = commandQueue else {
             return nil
         }
-
-        let devicePtr = Unmanaged.passUnretained(device).toOpaque()
-        let queuePtr = Unmanaged.passUnretained(commandQueue).toOpaque()
-        ganeshMetalContext = createGaneshMetalContext(devicePtr, queuePtr)
-        if ganeshMetalContext != nil {
-            print("[MobileInk][Ganesh] Experimental Ganesh/Metal renderer enabled")
+        ganeshPreparationAttempted = true
+        ganeshPreparationPending = true
+        ganeshPreparationRequest = MobileInkGaneshPreparation.prepare(device: device, commandQueue: commandQueue) { [weak self] context in
+            guard let self, !self.isReleased else {
+                if let context { MobileInkGaneshPreparation.discard(context) }
+                return
+            }
+            self.ganeshPreparationPending = false
+            self.ganeshPreparationRequest = nil
+            self.ganeshMetalContext = context
+            if context == nil {
+                NSLog("[MobileInk][Ganesh] Renderer preparation failed; using CPU rendering")
+            }
+            self.requestDisplay(forceWhenSuspended: true)
         }
-        return ganeshMetalContext
+        return nil
     }
 
     private func attachPresentedLoadCallbacks(to commandBuffer: MTLCommandBuffer) {
@@ -1821,57 +2236,194 @@ extension MobileInkCanvasView: MTKViewDelegate {
 
         let loadCallbacks = pendingPresentedLoadCallbacks
         pendingPresentedLoadCallbacks.removeAll()
-        commandBuffer.addCompletedHandler { _ in
+        commandBuffer.addCompletedHandler { [weak self] completed in
             DispatchQueue.main.async {
+                let error: String?
+                if self?.isReleased != false { error = "Canvas released before load presentation" }
+                else if completed.status == .error { error = "Metal could not present the loaded drawing" }
+                else { error = nil }
+                if error == nil { self?.interactionAudit?.didPresentInitialLoad() }
                 loadCallbacks.forEach { callback in
-                    callback([NSNull(), true])
+                    if let error { callback([error, NSNull()]) }
+                    else { callback([NSNull(), true]) }
                 }
             }
         }
     }
 
     func draw(in view: MTKView) {
-        guard let engine = drawingEngine else {
-            return
+        guard !isReleased, drawingEngine != nil, window != nil,
+              drawableSize.width > 0, drawableSize.height > 0,
+              let metalLayer = layer as? CAMetalLayer else { return }
+        // MTKView normally synchronizes its layer during its display callback.
+        // The asynchronous on-demand loop must do that before acquiring a
+        // drawable; otherwise zoom receives textures with the previous size.
+        if metalLayer.drawableSize != drawableSize { metalLayer.drawableSize = drawableSize }
+        hasPendingFrame = true
+        if useExperimentalGaneshBackend {
+            _ = ensureGaneshMetalContext()
+            if ganeshPreparationPending && !hasPresentedFrame { return }
         }
+        if pendingFrameRequestedAt == nil { pendingFrameRequestedAt = CACurrentMediaTime() }
 
+        // MTKView.currentDrawable can wait a full second when the presentation
+        // pool is exhausted. Never perform that wait on the Pencil/input thread.
+        frameAcquisition.acquire({ metalLayer.nextDrawable() }) { [weak self] drawable in
+            guard let self, !self.isReleased else { return }
+            guard let drawable, self.window != nil,
+                  drawable.texture.width == Int(self.drawableSize.width),
+                  drawable.texture.height == Int(self.drawableSize.height) else {
+                self.frameAcquisition.finish()
+                self.retryPendingFrame()
+                return
+            }
+            let requestedAt = self.pendingFrameRequestedAt ?? CACurrentMediaTime()
+            // The engine and target frame are read on the main thread below.
+            // A drawable acquired for an older revision is still usable when
+            // its size matches the latest geometry.
+            let revision = self.renderGeometryRevision
+            let geometrySwap = self.continuousDocument && self.frame != self.targetRenderFrame
+            let targetFrame = self.targetRenderFrame
+            self.hasPendingFrame = false
+            self.pendingFrameRequestedAt = nil
+            // Keep drawable waiting in the timing evidence even though it no
+            // longer blocks input; moving a wait must not hide a late frame.
+            let submitted = autoreleasepool { self.renderFrame(to: drawable, requestedAt: requestedAt,
+                geometrySwap: geometrySwap, targetFrame: targetFrame, revision: revision) }
+            // Commit hands ownership to Metal. Allow the next acquisition
+            // while that command buffer executes; CAMetalLayer bounds queued
+            // GPU work to its drawable pool without blocking touch delivery.
+            if !geometrySwap || !submitted { self.frameAcquisition.finish() }
+            if !submitted {
+                self.hasPendingFrame = true
+                self.pendingFrameRequestedAt = requestedAt
+                self.retryPendingFrame()
+            }
+        }
+    }
+
+    private func retryPendingFrame() {
+        let interval = 1.0 / Double(max(1, UIScreen.main.maximumFramesPerSecond))
+        DispatchQueue.main.asyncAfter(deadline: .now() + interval) { [weak self] in
+            guard let self, !self.isReleased, self.hasPendingFrame, self.window != nil else { return }
+            self.requestDisplay(forceWhenSuspended: true)
+        }
+    }
+
+    // A crop's image and its frame must appear in the same Core Animation
+    // transaction. Presenting an old drawable under a new frame stretches or
+    // shifts old ink for a few frames during a rapid pinch.
+    private func presentGeometryFrame(_ drawable: CAMetalDrawable, on commandBuffer: MTLCommandBuffer,
+                                      targetFrame: CGRect, revision: UInt64) {
+        commandBuffer.addCompletedHandler { [weak self] completed in
+            DispatchQueue.main.async {
+                guard let self, !self.isReleased else { return }
+                defer { self.frameAcquisition.finish() }
+                guard completed.status == .completed, self.window != nil,
+                      let metalLayer = self.layer as? CAMetalLayer else {
+                    self.hasPendingFrame = true
+                    self.retryPendingFrame()
+                    return
+                }
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                metalLayer.presentsWithTransaction = true
+                self.frame = targetFrame
+                drawable.present()
+                CATransaction.commit()
+                metalLayer.presentsWithTransaction = false
+                // Present the matching image and crop even when a newer crop
+                // arrived during rendering. Dropping every such frame can
+                // leave only a small old crop visible throughout a fast pinch.
+                if revision != self.renderGeometryRevision { self.hasPendingFrame = true }
+                let callbacks = self.pendingPresentedLoadCallbacks
+                self.pendingPresentedLoadCallbacks.removeAll()
+                if !callbacks.isEmpty { self.interactionAudit?.didPresentInitialLoad() }
+                callbacks.forEach { $0([NSNull(), true]) }
+                if self.hasPendingFrame { self.retryPendingFrame() }
+            }
+        }
+    }
+
+    private func finishFrameAfterSubmission(_ commandBuffer: MTLCommandBuffer, backend: MobileInkRenderBackend) {
+        commandBuffer.addCompletedHandler { [weak self] completed in
+            DispatchQueue.main.async {
+                guard let self, !self.isReleased else { return }
+                if completed.status == .error {
+                    NSLog("[MobileInk] Metal frame failed: %@", completed.error?.localizedDescription ?? "unknown error")
+                    if backend == .ganesh {
+                        // Keep the failed context alive until its cached images
+                        // and surfaces are released with the engine at teardown.
+                        self.ganeshFrameFailed = true
+                        self.hasPendingFrame = true
+                    }
+                }
+                // Drain coalesced updates without another display-cycle wait.
+                // An existing acquisition remains gated.
+                if self.hasPendingFrame { self.draw(in: self) }
+            }
+        }
+    }
+
+    private func renderFrame(to freshDrawable: CAMetalDrawable, requestedAt: CFTimeInterval,
+                             geometrySwap: Bool, targetFrame: CGRect, revision: UInt64) -> Bool {
+        guard let engine = drawingEngine, !isReleased else { return false }
+        // Cropping can resize the drawable without a delegate size callback.
+        // Keep the CPU upload buffer in step with the actual Metal drawable.
+        let currentWidth = Int32(freshDrawable.texture.width)
+        let currentHeight = Int32(freshDrawable.texture.height)
+        if currentWidth > 0, currentHeight > 0,
+           currentWidth != pixelWidth || currentHeight != pixelHeight {
+            pixelWidth = currentWidth
+            pixelHeight = currentHeight
+            if !useExperimentalGaneshBackend {
+                allocatePixelBuffer(width: Int(currentWidth), height: Int(currentHeight))
+            }
+        }
         let width = pixelWidth
         let height = pixelHeight
 
         if useExperimentalGaneshBackend,
            let commandQueue = commandQueue,
-           let ganeshContext = ensureGaneshMetalContext(),
-           let freshDrawable = view.currentDrawable {
+           let ganeshContext = ensureGaneshMetalContext() {
             let texturePtr = Unmanaged.passUnretained(freshDrawable.texture).toOpaque()
-            let renderStart = CACurrentMediaTime()
-            if renderToGaneshMetalTexture(engine, ganeshContext, texturePtr, width, height, usesCroppedViewport) {
-                let renderDurationMs = (CACurrentMediaTime() - renderStart) * 1000.0
+            if renderToGaneshMetalTextureForDisplay(engine, ganeshContext, texturePtr, width, height, usesCroppedViewport, darkDisplay) {
+                let renderDurationMs = (CACurrentMediaTime() - requestedAt) * 1000.0
                 guard let commandBuffer = commandQueue.makeCommandBuffer() else {
-                    return
+                    return false
                 }
-                attachPresentedLoadCallbacks(to: commandBuffer)
+                pixelBuffer?.deallocate()
+                pixelBuffer = nil
+                pixelBufferLength = 0
+                pixelBytesPerRow = 0
+                if !geometrySwap { attachPresentedLoadCallbacks(to: commandBuffer) }
                 attachBenchmarkFrameCallback(
                     to: commandBuffer,
                     backend: .ganesh,
                     didFallbackFromGanesh: false,
                     renderDurationMs: renderDurationMs
                 )
-                commandBuffer.present(freshDrawable)
+                hasPresentedFrame = true
+                if geometrySwap {
+                    presentGeometryFrame(freshDrawable, on: commandBuffer, targetFrame: targetFrame, revision: revision)
+                } else {
+                    commandBuffer.present(freshDrawable)
+                }
+                finishFrameAfterSubmission(commandBuffer, backend: .ganesh)
                 commandBuffer.commit()
-                return
+                return true
             }
         }
 
-        if useExperimentalGaneshBackend && pixelBuffer == nil && width > 0 && height > 0 {
+        if pixelBuffer == nil && width > 0 && height > 0 {
             allocatePixelBuffer(width: Int(width), height: Int(height))
         }
 
         guard let commandBuffer = commandQueue?.makeCommandBuffer(),
               let buffer = pixelBuffer else {
-            return
+            return false
         }
 
-        let renderStart = CACurrentMediaTime()
         let bytesPerRow = pixelBytesPerRow
 
         // Clear pixel buffer to transparent (background view underneath will show through)
@@ -1880,14 +2432,9 @@ extension MobileInkCanvasView: MTKViewDelegate {
         // Render Skia strokes to pixel buffer (no scaling - engine already in pixel coords)
         let canvas = createSkiaCanvas(UnsafeMutableRawPointer(buffer), width, height, Int32(bytesPerRow))
         if let canvas = canvas {
-            if usesCroppedViewport { renderVisibleViewportToCanvas(engine, canvas) }
-            else { renderToCanvas(engine, canvas) }
+            renderToDisplayCanvas(engine, canvas, usesCroppedViewport, darkDisplay)
             destroySkiaCanvas(canvas)
         }
-
-        // OPTIMIZATION: Acquire drawable as late as possible (after CPU rendering is done)
-        // This minimizes drawable hold time per Apple's Metal best practices
-        guard let freshDrawable = view.currentDrawable else { return }
 
         // Copy pixel buffer to drawable texture
         let region = MTLRegionMake2D(0, 0, Int(width), Int(height))
@@ -1897,24 +2444,31 @@ extension MobileInkCanvasView: MTKViewDelegate {
             withBytes: UnsafeRawPointer(buffer),
             bytesPerRow: bytesPerRow
         )
-        let renderDurationMs = (CACurrentMediaTime() - renderStart) * 1000.0
+        let renderDurationMs = (CACurrentMediaTime() - requestedAt) * 1000.0
 
-        attachPresentedLoadCallbacks(to: commandBuffer)
+        if !geometrySwap { attachPresentedLoadCallbacks(to: commandBuffer) }
         attachBenchmarkFrameCallback(
             to: commandBuffer,
             backend: .cpu,
-            didFallbackFromGanesh: useExperimentalGaneshBackend,
+            didFallbackFromGanesh: requestedRenderBackend == .ganesh,
             renderDurationMs: renderDurationMs
         )
 
-        commandBuffer.present(freshDrawable)
+        hasPresentedFrame = true
+        if geometrySwap {
+            presentGeometryFrame(freshDrawable, on: commandBuffer, targetFrame: targetFrame, revision: revision)
+        } else {
+            commandBuffer.present(freshDrawable)
+        }
+        finishFrameAfterSubmission(commandBuffer, backend: .cpu)
         commandBuffer.commit()
+        return true
     }
 }
 
 extension MobileInkCanvasView {
   private func canPreviewHoldToShape() -> Bool {
-    !isSelectionMode
+    holdToShapeEnabled && !isSelectionMode
       && !isTextMode
       && (pendingTool == "pen"
         || pendingTool == "pencil"

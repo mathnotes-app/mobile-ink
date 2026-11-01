@@ -68,6 +68,9 @@ export type NativeInkBenchmarkResult = {
   syntheticStrokeCount: number;
   syntheticPointCount: number;
   renderMs: NativeInkBenchmarkDistribution;
+  /** Main-queue responsiveness, sampled independently of drawing and idle frames. */
+  mainQueueDelayMs?: NativeInkBenchmarkDistribution;
+  mainQueueStallCount?: number;
   frameIntervalMs: NativeInkBenchmarkDistribution;
   presentationPauseMs?: NativeInkBenchmarkDistribution;
   presentationPauseCount?: number;

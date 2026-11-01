@@ -159,6 +159,11 @@ void SkiaDrawingEngine::touchBegan(
 
     currentPath_.moveTo(x, y);
 
+    if (currentTool_ == "eraser" && eraserMode_ == "pixel") {
+        hasLastEraserPoint_ = false;
+        applyPixelEraserAt(x, y, currentPaint_.getStrokeWidth() / 2.0f);
+    }
+
     // Start lasso selection if tool is select
     if (currentTool_ == "select") {
         selection_->lassoBegin(x, y);
@@ -196,9 +201,8 @@ void SkiaDrawingEngine::touchMoved(
     }
 
     const bool enhancedPenProfile = usesEnhancedPenProfile(currentTool_, isPencilInput);
-    const float coordinateSmoothingFactor = enhancedPenProfile
-        ? kPenCoordinateSmoothing
-        : kDefaultCoordinateSmoothing;
+    const float coordinateSmoothingFactor = currentTool_ == "eraser" ? 1.0f :
+        (enhancedPenProfile ? kPenCoordinateSmoothing : kDefaultCoordinateSmoothing);
     const float pressureSmoothingFactor = enhancedPenProfile
         ? kPenPressureSmoothing
         : kDefaultPressureSmoothing;
@@ -362,7 +366,7 @@ void SkiaDrawingEngine::touchEnded(long timestamp) {
 bool SkiaDrawingEngine::updateHoldShapePreview(long timestamp) {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
 
-    if (currentPoints_.empty() || currentTool_ == "select" || currentTool_ == "eraser") {
+    if (!holdToShapeEnabled_ || currentPoints_.empty() || currentTool_ == "select" || currentTool_ == "eraser") {
         clearActiveShapePreview();
         return false;
     }
@@ -398,6 +402,15 @@ bool SkiaDrawingEngine::updateHoldShapePreview(long timestamp) {
     activeStrokeRenderer_->reset();
 
     return true;
+}
+
+void SkiaDrawingEngine::setHoldToShapeEnabled(bool enabled) {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+    holdToShapeEnabled_ = enabled;
+    if (!enabled && hasActiveShapePreview_) {
+        clearActiveShapePreview();
+        activeStrokeRenderer_->reset();
+    }
 }
 
 bool SkiaDrawingEngine::updateActiveShapePreviewForPoint(float x, float y) {
@@ -535,13 +548,14 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
         shapeCandidate.recognized = true;
         shapeCandidate.toolType = activeShapePreviewToolType_;
         shapeCandidate.points = activeShapePreviewPoints_;
-    } else {
+    } else if (holdToShapeEnabled_) {
         shapeCandidate = recognizeHeldShape(currentPoints_, currentTool_, endTimestamp);
     }
 
     snapRecognizedShapeCandidateToStrokes(shapeCandidate, strokes_, averageCalculatedWidth(currentPoints_));
 
     Stroke stroke;
+    stroke.layerOrder = reserveLayerOrder();
     stroke.points = shapeCandidate.recognized ? shapeCandidate.points : currentPoints_;
     stroke.paint = currentPaint_;
     stroke.isEraser = (currentTool_ == "eraser" && eraserMode_ == "pixel");
@@ -595,7 +609,12 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
         std::max(8.0f, stroke.paint.getStrokeWidth() * 2.0f),
         std::max(8.0f, stroke.paint.getStrokeWidth() * 2.0f)
     );
-    invalidateStrokeTilesForRect(appendedStrokeBounds);
+    if (viewportOnly_ && stroke.toolType == "crayon" && !stroke.isEraser &&
+        (imageLayers_.empty() || imageLayers_.back().layerOrder < stroke.layerOrder)) {
+        appendStrokeToCachedTiles(appendedStrokeBounds, strokes_.size() - 1);
+    } else {
+        invalidateStrokeTilesForRect(appendedStrokeBounds);
+    }
 
     // === FAST PATH: Composite active stroke directly ===
     // This preserves O(1) stroke completion for smooth performance.
@@ -619,7 +638,7 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
         } else {
             // Render any remaining tail points to complete the stroke
             if (currentPoints_.size() > activeStrokeRenderer_->getLastRenderedIndex()) {
-                activeStrokeRenderer_->renderFinalTail(currentPoints_, currentPaint_, currentTool_);
+                activeStrokeRenderer_->renderFinalTail(currentPoints_, displayInkPaint(currentPaint_), currentTool_);
             }
 
             // Composite active stroke onto persistent stroke surface
@@ -631,8 +650,10 @@ void SkiaDrawingEngine::finishStroke(long endTimestamp) {
 
         // Track that we have composited strokes (for consistency check on tool switch)
         maxAffectedStrokeIndex_ = strokes_.size();
-    } else {
-        // Fallback for eraser or if surfaces unavailable
+    } else if (!viewportOnly_) {
+        // Full-page rendering needs a fresh stroke surface. Continuous
+        // documents have no such surface: their intersecting tiles were
+        // already invalidated above, and unrelated tiles remain valid.
         markStrokeCachesDirty();
     }
 
@@ -684,6 +705,8 @@ void SkiaDrawingEngine::clear() {
     delta.clearedEraserCircles = eraserCircles_;
 
     strokes_.clear();
+    crayonPictureCache_ = {};
+    penPictureCache_ = {};
     eraserCircles_.clear();
     resetIndexedSelectionState();
     currentPoints_.clear();
@@ -872,8 +895,17 @@ bool SkiaDrawingEngine::deserializeDrawing(const std::vector<uint8_t>& data) {
         return false;
     }
 
+    replaceDrawing(loadedStrokes);
+    return true;
+}
+
+void SkiaDrawingEngine::replaceDrawing(std::vector<Stroke>& preparedStrokes) {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
     cancelSelectionTransform();
-    strokes_ = std::move(loadedStrokes);
+    strokes_.swap(preparedStrokes);
+    crayonPictureCache_ = {};
+    penPictureCache_ = {};
+    for (const auto& stroke : strokes_) includeLayerOrder(stroke.layerOrder);
     eraserCircles_.clear();  // Clear eraser circles when loading
     bakedCircleCount_ = 0;  // No circles to bake
     resetIndexedSelectionState();
@@ -882,7 +914,6 @@ bool SkiaDrawingEngine::deserializeDrawing(const std::vector<uint8_t>& data) {
     undoStack_.clear();
     redoStack_.clear();
     markStrokeCachesDirty();
-    return true;
 }
 
 bool SkiaDrawingEngine::canUndo() const {

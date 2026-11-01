@@ -9,11 +9,16 @@ import type { NativeSelectionBounds } from "../types";
 
 export interface NativeInkCanvasProps {
   style?: ViewStyle;
-  onDrawingChange?: (event?: NativeSyntheticEvent<{ historyAction?: "undo" | "redo"; externalEdit?: { payload: string } }>) => void;
+  onDrawingChange?: (event?: NativeSyntheticEvent<{ historyAction?: "undo" | "redo"; externalEdit?: { payload: string }; completedStrokeTool?: string }>) => void;
   onDrawingBegin?: (event: NativeSyntheticEvent<{ x: number; y: number }>) => void;
   onSelectionChange?: (event: { nativeEvent: { count: number; bounds?: NativeSelectionBounds | null } }) => void;
   onCanvasReady?: () => void;
   backgroundType?: string;
+  documentImageLayersJSON?: string;
+  onImageLayersError?: (event: NativeSyntheticEvent<{ message: string }>) => void;
+  onImageLayersReady?: (event: NativeSyntheticEvent<{ json: string }>) => void;
+  /** Presentation only; persistence and exports retain authored colors. */
+  displayAppearance?: import('../displayAppearance').InkDisplayAppearance;
   pdfBackgroundUri?: string;
   renderSuspended?: boolean;
   /** iOS only: Chooses the native render path for A/B performance tests. */
@@ -27,8 +32,15 @@ export interface NativeInkCanvasProps {
   renderViewportTopRatio?: number;
   renderViewportWidthRatio?: number;
   renderViewportHeightRatio?: number;
+  /** Internal iOS hint for preparing a sharp continuous-document viewport. */
+  zoomPreparationTarget?: string;
+  onZoomPreparationReady?: (event: NativeSyntheticEvent<{ json: string }>) => void;
   /** iOS only: Controls whether fingers or only Apple Pencil can draw */
   drawingPolicy?: "default" | "anyinput" | "pencilonly";
+  /** Whether holding a stroke converts it to a recognized shape. Defaults to true. */
+  holdToShapeEnabled?: boolean;
+  /** Reuse cached ink at an approximate resolution while the viewport moves. */
+  viewportMotionActive?: boolean;
   /** iOS only: Fired when Apple Pencil barrel is double-tapped (2nd gen+) */
   onPencilDoubleTap?: (event: NativeSyntheticEvent<{ sequence: number; timestamp: number }>) => void;
 }
@@ -40,6 +52,7 @@ export interface NativeInkCanvasRef {
   clearDocumentPage: (pageIndex: number, pageHeight: number) => void;
   /** Records an opaque overlay patch in the same bounded history as ink. */
   recordExternalEdit: (before: string, after: string) => Promise<boolean>;
+  reserveLayerOrder: () => Promise<number>;
   undo: () => void;
   redo: () => void;
   setTool: (toolType: string, width: number, color: string, eraserMode?: string) => void;

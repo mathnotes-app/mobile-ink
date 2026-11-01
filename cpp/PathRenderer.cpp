@@ -63,6 +63,9 @@ void PathRenderer::drawVariableWidthPath(
 
     // Create path from edges
     SkPath strokePath;
+    // Reuse the recorded outline, while letting Ganesh retessellate it at
+    // each zoom level so cached low-resolution geometry cannot distort ink.
+    strokePath.setIsVolatile(true);
     std::vector<SkPoint> leftEdge, rightEdge;
     for (const auto& ep : edges) {
         leftEdge.push_back(ep.left);
@@ -382,6 +385,17 @@ IncrementalResult PathRenderer::drawVariableWidthPathIncremental(
     fillPaint.setStyle(SkPaint::kFill_Style);
     fillPaint.setAntiAlias(true);
     canvas->drawPath(path, fillPaint);
+
+    if (!isFirstSegment && fillPaint.getAlpha() == 255 && fillPaint.asBlendMode() == SkBlendMode::kSrcOver) {
+        // Adjacent anti-aliased filled segments each cover only part of their
+        // shared edge. Paint that internal join once so those fractional
+        // coverages do not show up as faint lines across an opaque pen stroke.
+        SkPaint seam = fillPaint;
+        seam.setStyle(SkPaint::kStroke_Style);
+        seam.setStrokeCap(SkPaint::kButt_Cap);
+        seam.setStrokeWidth(2.0f / std::max(0.01f, canvas->getTotalMatrix().getMaxScale()));
+        canvas->drawLine(prevLeftEdge, prevRightEdge, seam);
+    }
 
     // Return last edge
     result.lastLeftEdge = edges.back().left;

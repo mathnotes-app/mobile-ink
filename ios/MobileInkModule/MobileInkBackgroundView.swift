@@ -186,8 +186,9 @@ class MobileInkBackgroundView: UIView {
       return
     }
 
+    let dark = isDarkMode
     // Fill background based on theme
-    if isDarkMode {
+    if dark && backgroundType != "pdf" {
       context.setFillColor(UIColor(red: 0.15, green: 0.15, blue: 0.15, alpha: 1.0).cgColor)
     } else {
       context.setFillColor(UIColor.white.cgColor)
@@ -197,13 +198,13 @@ class MobileInkBackgroundView: UIView {
     // Draw pattern based on type
     switch backgroundType {
     case "lined":
-      drawLinedBackground(in: context, rect: rect)
+      drawLinedBackground(in: context, rect: rect, dark: dark)
     case "grid":
-      drawGridBackground(in: context, rect: rect)
+      drawGridBackground(in: context, rect: rect, dark: dark)
     case "dotted":
-      drawDottedBackground(in: context, rect: rect)
+      drawDottedBackground(in: context, rect: rect, dark: dark)
     case "graph":
-      drawGraphBackground(in: context, rect: rect)
+      drawGraphBackground(in: context, rect: rect, dark: dark)
     case "pdf":
       if windowPageNumbers.count > 1 {
         drawPDFWindowBackground(in: context, rect: rect)
@@ -212,6 +213,13 @@ class MobileInkBackgroundView: UIView {
       }
     default:
       break // plain - just background color
+    }
+    if dark && backgroundType == "pdf" {
+      context.saveGState()
+      context.setBlendMode(.difference)
+      context.setFillColor(UIColor(white: 0.85, alpha: 1).cgColor)
+      context.fill(rect)
+      context.restoreGState()
     }
   }
 
@@ -251,8 +259,8 @@ class MobileInkBackgroundView: UIView {
     return singlePageHeight / CGFloat(max(1, adjustedLineCount))
   }
 
-  private func drawLinedBackground(in context: CGContext, rect: CGRect) {
-    if isDarkMode {
+  private func drawLinedBackground(in context: CGContext, rect: CGRect, dark: Bool) {
+    if dark {
       context.setStrokeColor(UIColor(red: 0.30, green: 0.30, blue: 0.30, alpha: 1.0).cgColor)
     } else {
       context.setStrokeColor(UIColor(red: 0.88, green: 0.88, blue: 0.88, alpha: 1.0).cgColor)
@@ -272,8 +280,8 @@ class MobileInkBackgroundView: UIView {
     }
   }
 
-  private func drawGridBackground(in context: CGContext, rect: CGRect) {
-    if isDarkMode {
+  private func drawGridBackground(in context: CGContext, rect: CGRect, dark: Bool) {
+    if dark {
       context.setStrokeColor(UIColor(red: 0.30, green: 0.30, blue: 0.30, alpha: 1.0).cgColor)
     } else {
       context.setStrokeColor(UIColor(red: 0.88, green: 0.88, blue: 0.88, alpha: 1.0).cgColor)
@@ -301,8 +309,8 @@ class MobileInkBackgroundView: UIView {
     }
   }
 
-  private func drawDottedBackground(in context: CGContext, rect: CGRect) {
-    if isDarkMode {
+  private func drawDottedBackground(in context: CGContext, rect: CGRect, dark: Bool) {
+    if dark {
       context.setFillColor(UIColor(red: 0.30, green: 0.30, blue: 0.30, alpha: 1.0).cgColor)
     } else {
       context.setFillColor(UIColor(red: 0.88, green: 0.88, blue: 0.88, alpha: 1.0).cgColor)
@@ -327,9 +335,9 @@ class MobileInkBackgroundView: UIView {
     }
   }
 
-  private func drawGraphBackground(in context: CGContext, rect: CGRect) {
+  private func drawGraphBackground(in context: CGContext, rect: CGRect, dark: Bool) {
     // Minor grid
-    if isDarkMode {
+    if dark {
       context.setStrokeColor(UIColor(red: 0.22, green: 0.22, blue: 0.22, alpha: 1.0).cgColor)
     } else {
       context.setStrokeColor(UIColor(red: 0.94, green: 0.94, blue: 0.94, alpha: 1.0).cgColor)
@@ -360,7 +368,7 @@ class MobileInkBackgroundView: UIView {
     }
 
     // Major grid
-    if isDarkMode {
+    if dark {
       context.setStrokeColor(UIColor(red: 0.35, green: 0.35, blue: 0.35, alpha: 1.0).cgColor)
     } else {
       context.setStrokeColor(UIColor(red: 0.80, green: 0.80, blue: 0.80, alpha: 1.0).cgColor)
@@ -440,8 +448,9 @@ class MobileInkBackgroundView: UIView {
   func drawIntoContext(_ context: CGContext, rect: CGRect) {
     context.saveGState()
 
+    let dark = false // Export keeps the authored light paper and pattern colors.
     // Fill background based on theme
-    if isDarkMode {
+    if dark {
       context.setFillColor(UIColor(red: 0.15, green: 0.15, blue: 0.15, alpha: 1.0).cgColor)
     } else {
       context.setFillColor(UIColor.white.cgColor)
@@ -451,13 +460,13 @@ class MobileInkBackgroundView: UIView {
     // Draw pattern based on type
     switch backgroundType {
     case "lined":
-      drawLinedBackground(in: context, rect: rect)
+      drawLinedBackground(in: context, rect: rect, dark: dark)
     case "grid":
-      drawGridBackground(in: context, rect: rect)
+      drawGridBackground(in: context, rect: rect, dark: dark)
     case "dotted":
-      drawDottedBackground(in: context, rect: rect)
+      drawDottedBackground(in: context, rect: rect, dark: dark)
     case "graph":
-      drawGraphBackground(in: context, rect: rect)
+      drawGraphBackground(in: context, rect: rect, dark: dark)
     case "pdf":
       if windowPageNumbers.count > 1 {
         drawPDFWindowBackground(in: context, rect: rect)

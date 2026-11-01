@@ -1,5 +1,5 @@
-import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { PixelRatio, StyleSheet, View } from 'react-native';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { PixelRatio, Platform, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NativeInkCanvas, type NativeInkCanvasRef } from '../NativeInkCanvas';
 import ZoomableInkViewport, { type ZoomableInkViewportRef, type TouchExclusionRect } from '../ZoomableInkViewport';
@@ -10,7 +10,7 @@ import { DEFAULT_CONTENT_PADDING, DEFAULT_PAGE_HEIGHT, DEFAULT_PAGE_WIDTH } from
 import { clonePage, getVisiblePageIndex, parseNotebookData } from './notebookPages';
 import { createBlankPage, BLANK_PAGE_PAYLOAD, pageHasContent, pageHasPdfBackground } from '../utils/pageGrowth';
 import { getRevealTranslateY, getRevealTargetScreenY } from '../utils/viewportTransform';
-import { resolveDocumentRenderTarget, type DocumentRenderTarget } from '../utils/documentRenderTarget';
+import { nextDocumentPrewarmTarget, resolveDocumentRenderTarget, type DocumentRenderTarget } from '../utils/documentRenderTarget';
 import { computeDataSignature } from '../utils/dataSignature';
 import { PageBackgrounds, PageBreaks } from './PageStack';
 import { selectionBoundsToTouchRect } from './selectionTouchRects';
@@ -18,12 +18,18 @@ import { styles } from './styles';
 
 export type ContinuousDocumentCanvasRef = InfiniteInkCanvasRef & {
   recordExternalEdit: (before: string, after: string) => Promise<boolean>;
+  reserveLayerOrder: () => Promise<number>;
 };
 export type ContinuousDocumentCanvasProps = InfiniteInkCanvasProps & {
   /** Apply this host-owned overlay patch after a native undo/redo. */
   onExternalEdit?: (payload: string) => void;
+  /** Host overlay bodies/handles, in unscaled viewport-content coordinates. */
+  blockedTouchRects?: TouchExclusionRect[];
   /** Called after the corresponding ink/overlay update has been delivered. */
   onHistoryAction?: (action: "undo" | "redo") => void;
+  /** A normal ink or eraser gesture completed, excluding cancelled gestures and history. */
+  onStrokeEnd?: (tool: string) => void;
+  documentImageLayersJSON?: string;
 };
 
 /**
@@ -59,6 +65,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
   const callbacks = useRef(props); callbacks.current = props;
   const ready = useRef(false);
   const [inputReady, setInputReady] = useState(false);
+  const [installedImageLayers, setInstalledImageLayers] = useState<string | null>(null);
   const initializing = useRef(false);
   const mounted = useRef(true);
   const currentPage = useRef(0);
@@ -72,12 +79,20 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
   // re-render this tree or the native surface (see resolveDocumentRenderTarget).
   const transformRef = useRef<InfiniteInkViewportTransform | null>(null);
   const isMoving = useRef(false);
+  const [viewportMotionActive, setViewportMotionActive] = useState(false);
   const renderLayout = useCallback(() => ({ pageWidth, pageHeight, pageCount: pagesRef.current.length, contentPadding }),
     [contentPadding, pageHeight, pageWidth]);
   const [renderTarget, setRenderTarget] = useState<DocumentRenderTarget>(
     () => resolveDocumentRenderTarget(null, null, renderLayout(), false));
+  const renderTargetRef = useRef(renderTarget);
+  renderTargetRef.current = renderTarget;
+  const [zoomPreparationTarget, setZoomPreparationTarget] = useState<(DocumentRenderTarget & { prefetch?: boolean }) | null>(null);
+  const prewarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectionRects, setSelectionRects] = useState<TouchExclusionRect[]>([]);
+  const blockedTouchRects = useMemo(() => [...selectionRects, ...(props.blockedTouchRects ?? [])],
+    [props.blockedTouchRects, selectionRects]);
   const documentHeight = pages.length * pageHeight;
+  const overlayInteractive = ['select', 'text', 'insert'].includes(toolState.toolType);
   const density = PixelRatio.get();
   const report = useCallback((error: unknown) => {
     const failure = error instanceof Error ? error : new Error(String(error));
@@ -184,6 +199,8 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
     getNotebookData: capture, loadNotebookData: load, addPage,
     recordExternalEdit: (before, after) => ready.current && canvas.current
       ? canvas.current.recordExternalEdit(before, after) : Promise.resolve(false),
+    reserveLayerOrder: () => ready.current && canvas.current
+      ? canvas.current.reserveLayerOrder() : Promise.reject(new Error('Document canvas is not ready')),
     undo: () => { if (ready.current) canvas.current?.undo(); },
     redo: () => { if (ready.current) canvas.current?.redo(); },
     clearCurrentPage: () => { if (ready.current) canvas.current?.clearDocumentPage(currentPage.current, pageHeight * density); },
@@ -212,38 +229,95 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
     setRenderTarget(previous => resolveDocumentRenderTarget(previous, transformRef.current, layout, isMoving.current));
   }, [renderLayout]);
   useEffect(updateRenderTarget, [pages.length, updateRenderTarget]);
+  const schedulePrewarm = useCallback(() => {
+    if (prewarmTimer.current) clearTimeout(prewarmTimer.current);
+    if (!inputReady || isMoving.current || Platform.OS !== 'ios' || props.renderBackend === 'cpu') return;
+    prewarmTimer.current = setTimeout(() => {
+      prewarmTimer.current = null;
+      if (isMoving.current) return;
+      const candidate = nextDocumentPrewarmTarget(renderTargetRef.current, transformRef.current, renderLayout());
+      if (candidate) setZoomPreparationTarget({ ...candidate, prefetch: true });
+    }, 700);
+  }, [inputReady, props.renderBackend, renderLayout]);
+  useEffect(() => {
+    if (!viewportMotionActive) schedulePrewarm();
+    return () => { if (prewarmTimer.current) clearTimeout(prewarmTimer.current); };
+  }, [viewportMotionActive, renderTarget, pages.length, schedulePrewarm]);
   const onMotionStateChange = useCallback((moving: boolean) => {
     isMoving.current = moving;
+    setViewportMotionActive(moving);
     updateRenderTarget();
     callbacks.current.onMotionStateChange?.(moving);
   }, [updateRenderTarget]);
   const onTransform = useCallback((next: InfiniteInkViewportTransform) => {
     transformRef.current = next;
     updateRenderTarget();
+    if (isMoving.current && Platform.OS === 'ios' && props.renderBackend !== 'cpu') {
+      // Preparing the visible area plus a modest margin gets sharp pixels
+      // ready sooner while retaining room for small pans.
+      const layout = { ...renderLayout(), overscanFraction: 0.15 };
+      const target = resolveDocumentRenderTarget(null, next, layout, false);
+      // Lower-resolution tiles cannot improve a surface that is already
+      // sharper. Stop obsolete preparation as the pinch reverses.
+      if (target.renderScale > renderTargetRef.current.renderScale) {
+        setZoomPreparationTarget(previous => resolveDocumentRenderTarget(previous?.prefetch ? null : previous, next, layout, false));
+      } else {
+        setZoomPreparationTarget(null);
+      }
+    }
     const index = getVisiblePageIndex(next, pageHeight, pagesRef.current.length, contentPadding);
     if (index !== currentPage.current) {
       currentPage.current = index; setVisiblePage(index);
       callbacks.current.onCurrentPageChange?.(index);
     }
     callbacks.current.onTransformChange?.(next);
-  }, [contentPadding, pageHeight, updateRenderTarget]);
-  return <GestureHandlerRootView style={[styles.root, props.style]}>
+  }, [contentPadding, pageHeight, props.renderBackend, renderLayout, updateRenderTarget]);
+  const onZoomPreparationReady = useCallback(({ nativeEvent }: { nativeEvent: { json: string } }) => {
+    let candidate: DocumentRenderTarget & { prefetch?: boolean };
+    try { candidate = JSON.parse(nativeEvent.json) as DocumentRenderTarget & { prefetch?: boolean }; }
+    catch { return; }
+    if (!candidate || [candidate.renderScale, candidate.leftRatio, candidate.topRatio,
+      candidate.widthRatio, candidate.heightRatio].some(value => typeof value !== 'number' || !Number.isFinite(value)) ||
+      candidate.renderScale <= 0 || candidate.leftRatio < 0 || candidate.topRatio < 0 ||
+      candidate.widthRatio <= 0 || candidate.heightRatio <= 0 ||
+      candidate.leftRatio + candidate.widthRatio > 1.000001 || candidate.topRatio + candidate.heightRatio > 1.000001) return;
+    if (candidate.prefetch && !isMoving.current) return;
+    const layout = renderLayout();
+    if (resolveDocumentRenderTarget(candidate, transformRef.current, layout, false) !== candidate) return;
+    setRenderTarget(previous => previous.renderScale >= candidate.renderScale &&
+      resolveDocumentRenderTarget(previous, transformRef.current, layout, true) === previous ? previous : candidate);
+  }, [renderLayout]);
+  return <GestureHandlerRootView style={[styles.root, props.style, props.displayAppearance === 'dark' && { backgroundColor: '#171717' }]}>
     <ZoomableInkViewport ref={viewport} style={styles.viewport} minScale={props.minScale ?? 1} maxScale={props.maxScale ?? 5}
       contentWidth={pageWidth} contentHeight={documentHeight} contentPadding={contentPadding} isLandscape
       fingerDrawingEnabled={props.fingerDrawingEnabled} enableMomentumScroll lockHorizontalPanNearFit
-      blockedTouchRects={selectionRects} singleFingerPanBlocked={selectionRects.length > 0}
+      onContentTap={props.fingerDrawingEnabled ? undefined : props.onContentTap}
+      blockedTouchRects={blockedTouchRects} singleFingerPanBlocked={selectionRects.length > 0}
       transformNotificationMinIntervalMs={props.transformNotificationMinIntervalMs ?? 16}
       onTransformChange={onTransform} onMotionStateChange={onMotionStateChange}>
       <View style={[styles.canvasShell, { paddingTop: contentPadding, paddingBottom: contentPadding }]}>
-        <View testID="continuous-document-input" pointerEvents={inputReady ? "auto" : "none"} style={{ width: pageWidth, height: documentHeight }}>
-          <PageBackgrounds pages={pages} pageWidth={pageWidth} pageHeight={pageHeight} backgroundType={props.backgroundType ?? 'plain'}
+        <View testID="continuous-document-input" pointerEvents={inputReady &&
+          (props.documentImageLayersJSON === undefined || props.documentImageLayersJSON === installedImageLayers) ? "auto" : "none"}
+          style={{ width: pageWidth, height: documentHeight }}>
+          <PageBackgrounds displayAppearance={props.displayAppearance} pages={pages} pageWidth={pageWidth} pageHeight={pageHeight} backgroundType={props.backgroundType ?? 'plain'}
             pdfBackgroundBaseUri={props.pdfBackgroundBaseUri} visiblePageIndex={visiblePage} showPageLabels={props.showPageLabels ?? true} />
-          <NativeInkCanvas ref={canvas} style={StyleSheet.absoluteFillObject} continuousDocument backgroundType="pdf"
+          <View testID="continuous-document-overlay" pointerEvents={overlayInteractive ? 'box-none' : 'none'}
+            style={[StyleSheet.absoluteFillObject, { zIndex: overlayInteractive ? 2 : 0 }]}>{props.overlay}</View>
+          <NativeInkCanvas displayAppearance={props.displayAppearance} ref={canvas} style={{ ...StyleSheet.absoluteFillObject, zIndex: 1 }} continuousDocument backgroundType="pdf"
+            documentImageLayersJSON={props.documentImageLayersJSON}
+            onImageLayersError={({nativeEvent}) => report(new Error(nativeEvent.message))}
+            onImageLayersReady={({nativeEvent}) => setInstalledImageLayers(nativeEvent.json)}
             renderBackend={props.renderBackend} renderScale={renderTarget.renderScale}
             renderViewportLeftRatio={renderTarget.leftRatio} renderViewportTopRatio={renderTarget.topRatio}
             renderViewportWidthRatio={renderTarget.widthRatio} renderViewportHeightRatio={renderTarget.heightRatio}
+            zoomPreparationTarget={zoomPreparationTarget ? JSON.stringify(zoomPreparationTarget) : undefined}
+            onZoomPreparationReady={onZoomPreparationReady}
             drawingPolicy={props.fingerDrawingEnabled ? 'anyinput' : 'pencilonly'} onCanvasReady={onReady}
+            holdToShapeEnabled={props.holdToShapeEnabled}
+            viewportMotionActive={viewportMotionActive}
             onDrawingBegin={event => {
+              if (prewarmTimer.current) clearTimeout(prewarmTimer.current);
+              setZoomPreparationTarget(null);
               revision.current++;
               drawingPage.current = Math.max(0, Math.min(pagesRef.current.length - 1, Math.floor(event.nativeEvent.y / pageHeight)));
               const last = pagesRef.current[pagesRef.current.length - 1];
@@ -257,6 +331,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
               if (patch !== undefined) {
                 callbacks.current.onExternalEdit?.(patch);
                 if (action) callbacks.current.onHistoryAction?.(action);
+                schedulePrewarm();
                 return;
               }
               revision.current++;
@@ -268,6 +343,9 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
               }
               if (page) callbacks.current.onDrawingChange?.(page.id);
               if (action) callbacks.current.onHistoryAction?.(action);
+              const completedTool = event?.nativeEvent.completedStrokeTool;
+              if (completedTool) callbacks.current.onStrokeEnd?.(completedTool);
+              schedulePrewarm();
             }}
             onSelectionChange={({ nativeEvent: { count, bounds } }) => {
               const touchRect = selectionBoundsToTouchRect({ bounds: bounds ?? null, pageIndex: 0, pageWidth, pageHeight,
@@ -278,8 +356,7 @@ export const ContinuousDocumentCanvas = forwardRef<ContinuousDocumentCanvasRef, 
               if (page) callbacks.current.onSelectionChange?.(page.id, count, bounds ? { ...bounds, y: bounds.y - index * pageHeight } : null);
             }}
             onPencilDoubleTap={event => callbacks.current.onPencilDoubleTap?.(event)} />
-          {props.overlay}
-          <PageBreaks pages={pages} pageHeight={pageHeight} />
+          <PageBreaks pages={pages} pageHeight={pageHeight} displayAppearance={props.displayAppearance} />
         </View>
       </View>
     </ZoomableInkViewport>

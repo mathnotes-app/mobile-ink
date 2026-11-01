@@ -49,6 +49,7 @@ void applyStrokeDelta(
                     target.push_back(circle);
                 }
                 strokes[entry.strokeIndex].cachedEraserCount = 0;
+                strokes[entry.strokeIndex].cachedEraserOptimized = false;
             }
             break;
         }
@@ -117,6 +118,7 @@ void revertStrokeDelta(
                     target.pop_back();
                 }
                 strokes[entry.strokeIndex].cachedEraserCount = 0;
+                strokes[entry.strokeIndex].cachedEraserOptimized = false;
             }
             break;
         }

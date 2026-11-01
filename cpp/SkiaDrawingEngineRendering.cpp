@@ -4,18 +4,46 @@
 #include "BackgroundRenderer.h"
 #include "BatchExporter.h"
 #include "DrawingSelection.h"
+#include "DisplayAppearance.h"
 #include "PathRenderer.h"
 #include "ShapeRecognition.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <utility>
 
 #include <include/core/SkData.h>
 #include <include/core/SkImageInfo.h>
+#include <include/core/SkRRect.h>
+#include <include/core/SkSamplingOptions.h>
 #include <include/encode/SkPngEncoder.h>
 
 namespace nativedrawing {
+
+void SkiaDrawingEngine::setInkDisplayTransform(bool dark, bool swapRedBlue) {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+    if (dark == displayInkDark_ && swapRedBlue == displayInkSwap_) return;
+    displayInkDark_ = dark;
+    displayInkSwap_ = swapRedBlue;
+    displayInkFilter_ = makeDisplayColorFilter(dark, swapRedBlue);
+    displayInkColors_.clear();
+    activeStrokeRenderer_->reset();
+    markStrokeCachesDirty();
+}
+
+SkPaint SkiaDrawingEngine::displayInkPaint(const SkPaint& original) {
+    if (!displayInkFilter_) return original;
+    const SkColor color = original.getColor();
+    auto found = displayInkColors_.find(color);
+    if (found == displayInkColors_.end()) {
+        const auto converted = displayInkFilter_->filterColor4f(SkColor4f::FromColor(color), nullptr, nullptr).toSkColor();
+        found = displayInkColors_.emplace(color, converted).first;
+    }
+    SkPaint paint = original;
+    paint.setColor(found->second);
+    return paint;
+}
 
 namespace {
 
@@ -58,11 +86,31 @@ void SkiaDrawingEngine::setPdfBackgroundImage(sk_sp<SkImage> image) {
     pdfBackgroundImage_ = image;
 }
 
+void SkiaDrawingEngine::renderImageLayer(SkCanvas* canvas, const ImageLayer& layer) {
+    if (!canvas || layer.hidden || !layer.image || layer.bounds.isEmpty() || layer.crop.isEmpty()) return;
+    const float fullWidth = layer.bounds.width() / layer.crop.width();
+    const float fullHeight = layer.bounds.height() / layer.crop.height();
+    const float coverScale = std::max(fullWidth / layer.image->width(), fullHeight / layer.image->height());
+    if (!std::isfinite(coverScale) || coverScale <= 0) return;
+    const float sourceWidth = fullWidth / coverScale, sourceHeight = fullHeight / coverScale;
+    const SkRect source = SkRect::MakeXYWH((layer.image->width() - sourceWidth) / 2,
+        (layer.image->height() - sourceHeight) / 2, sourceWidth, sourceHeight);
+    const SkRect target = SkRect::MakeXYWH(layer.bounds.left() - layer.crop.left() * fullWidth,
+        layer.bounds.top() - layer.crop.top() * fullHeight, fullWidth, fullHeight);
+    canvas->save();
+    canvas->rotate(layer.rotation, layer.bounds.centerX(), layer.bounds.centerY());
+    canvas->clipRRect(SkRRect::MakeRectXY(layer.bounds, layer.cornerRadius, layer.cornerRadius), SkClipOp::kIntersect, true);
+    canvas->drawImageRect(layer.image, source, target, SkSamplingOptions(SkFilterMode::kLinear), nullptr,
+        SkCanvas::kStrict_SrcRectConstraint);
+    canvas->restore();
+}
+
 void SkiaDrawingEngine::renderStrokeGeometry(SkCanvas* canvas, const Stroke& stroke, const SkPaint& paint) {
     if (!canvas) {
         return;
     }
 
+    const SkPaint displayPaint = displayInkPaint(paint);
     if (isRecognizedShapeToolType(stroke.toolType)) {
         SkPath shapePath = stroke.path;
         if (shapePath.isEmpty()) {
@@ -73,7 +121,7 @@ void SkiaDrawingEngine::renderStrokeGeometry(SkCanvas* canvas, const Stroke& str
             return;
         }
 
-        SkPaint shapePaint = paint;
+        SkPaint shapePaint = displayPaint;
         shapePaint.setStyle(SkPaint::kStroke_Style);
         shapePaint.setStrokeWidth(averageCalculatedWidth(stroke.points));
         shapePaint.setStrokeJoin(stroke.toolType == "shape-line"
@@ -87,16 +135,16 @@ void SkiaDrawingEngine::renderStrokeGeometry(SkCanvas* canvas, const Stroke& str
     }
 
     if (isCenterlineStrokedToolType(stroke.toolType)) {
-        drawCenterlineStrokePath(canvas, stroke.points, stroke.path, paint);
+        drawCenterlineStrokePath(canvas, stroke.points, stroke.path, displayPaint);
         return;
     }
 
     if (stroke.toolType == "crayon") {
-        pathRenderer_->drawCrayonPath(canvas, stroke.points, paint, false);
+        pathRenderer_->drawCrayonPath(canvas, stroke.points, displayPaint, false);
     } else if (stroke.toolType == "calligraphy") {
-        pathRenderer_->drawCalligraphyPath(canvas, stroke.points, paint, false);
+        pathRenderer_->drawCalligraphyPath(canvas, stroke.points, displayPaint, false);
     } else {
-        pathRenderer_->drawVariableWidthPath(canvas, stroke.points, paint, false);
+        pathRenderer_->drawVariableWidthPath(canvas, stroke.points, displayPaint, false);
     }
 }
 
@@ -198,7 +246,7 @@ void SkiaDrawingEngine::renderActiveContent(SkCanvas* canvas) {
             // preview: the stroke is drawn over the composited canvas here,
             // whereas the finished stroke multiplies only against other
             // strokes on the transparent stroke layer.
-            SkPaint previewPaint = currentPaint_;
+            SkPaint previewPaint = displayInkPaint(currentPaint_);
             if (previewPaint.asBlendMode() == SkBlendMode::kMultiply) {
                 previewPaint.setBlendMode(SkBlendMode::kSrcOver);
             }
@@ -213,9 +261,10 @@ void SkiaDrawingEngine::renderActiveContent(SkCanvas* canvas) {
             activeStrokeRenderer_->renderIncremental(
                 canvas,
                 currentPoints_,
-                currentPaint_,
+                displayInkPaint(currentPaint_),
                 currentTool_,
-                viewport
+                viewport,
+                predictedPointCount_
             );
         }
     }
@@ -224,7 +273,7 @@ void SkiaDrawingEngine::renderActiveContent(SkCanvas* canvas) {
 void SkiaDrawingEngine::render(SkCanvas* canvas) {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
 
-    const bool useScaleAwarePath = viewportOnly_ || renderScale_ > kIdentityRenderScaleThreshold;
+    const bool useScaleAwarePath = viewportOnly_ || std::fabs(renderScale_ - 1.0f) > 0.01f;
 
     if (useScaleAwarePath) {
         if (backgroundType_ == "pdf") {
@@ -291,7 +340,7 @@ void SkiaDrawingEngine::render(SkCanvas* canvas) {
             if (viewportOnly_ && isDraggingSelection_) {
                 canvas->translate(selectionOffsetX_, selectionOffsetY_);
             }
-            selection_->renderSelection(canvas, strokes_, selectedIndices_);
+            selection_->renderSelection(canvas, strokes_, selectedIndices_, displayInkSwap_);
         }
         canvas->restore();
         return;
@@ -444,7 +493,7 @@ void SkiaDrawingEngine::render(SkCanvas* canvas) {
         // During drag, use cached highlight with offset - O(1)
         canvas->drawImage(selectionHighlightSnapshot_, selectionOffsetX_, selectionOffsetY_);
     } else {
-        selection_->renderSelection(canvas, strokes_, selectedIndices_);
+        selection_->renderSelection(canvas, strokes_, selectedIndices_, displayInkSwap_);
     }
 }
 

@@ -1,5 +1,8 @@
 import Foundation
 
+@_silgen_name("warmGaneshMetalContext")
+func warmGaneshMetalContext(_ context: OpaquePointer, _ device: UnsafeMutableRawPointer) -> Bool
+
 // MARK: - C++ Drawing Engine Bridge Declarations
 // These are Skia/C++ function declarations used by MobileInkCanvasView
 
@@ -28,6 +31,58 @@ func touchEnded(_ engine: OpaquePointer, _ timestamp: Int64)
 
 @_silgen_name("updateHoldShapePreview")
 func updateHoldShapePreview(_ engine: OpaquePointer, _ timestamp: Int64) -> Bool
+@_silgen_name("setHoldToShapeEnabled")
+func setHoldToShapeEnabled(_ engine: OpaquePointer, _ enabled: Bool)
+@_silgen_name("setViewportMotionActive")
+func setViewportMotionActive(_ engine: OpaquePointer, _ active: Bool)
+@_silgen_name("warmCrayonTextures")
+func warmCrayonTextures()
+@_silgen_name("snapshotEraserMasks")
+func snapshotEraserMasks(_ engine: OpaquePointer) -> UnsafeMutableRawPointer?
+@_silgen_name("snapshotZoomTiles")
+func snapshotZoomTiles(_ engine: OpaquePointer, _ scale: Float, _ left: Float, _ top: Float,
+                       _ width: Float, _ height: Float) -> UnsafeMutableRawPointer?
+@_silgen_name("prepareNextZoomTile")
+func prepareNextZoomTile(_ snapshot: UnsafeMutableRawPointer, _ context: OpaquePointer,
+                         _ device: UnsafeMutableRawPointer, _ texture: UnsafeMutablePointer<UnsafeMutableRawPointer?>) -> Int32
+@_silgen_name("releaseZoomTileTexture")
+func releaseZoomTileTexture(_ texture: UnsafeMutableRawPointer)
+@_silgen_name("limitZoomTileContext")
+func limitZoomTileContext(_ context: OpaquePointer)
+@_silgen_name("installPreparedZoomTile")
+func installPreparedZoomTile(_ engine: OpaquePointer, _ snapshot: UnsafeMutableRawPointer,
+                             _ context: OpaquePointer, _ texture: UnsafeMutableRawPointer) -> Bool
+@_silgen_name("hasPreparedZoomTiles")
+func hasPreparedZoomTiles(_ engine: OpaquePointer, _ snapshot: UnsafeMutableRawPointer) -> Bool
+@_silgen_name("releaseZoomTileSnapshot")
+func releaseZoomTileSnapshot(_ snapshot: UnsafeMutableRawPointer)
+@_silgen_name("optimizeNextEraserMask")
+func optimizeNextEraserMask(_ snapshot: UnsafeMutableRawPointer) -> Int32
+@_silgen_name("installOptimizedEraserMask")
+func installOptimizedEraserMask(_ engine: OpaquePointer, _ snapshot: UnsafeMutableRawPointer)
+@_silgen_name("releaseEraserMaskSnapshot")
+func releaseEraserMaskSnapshot(_ snapshot: UnsafeMutableRawPointer)
+@_silgen_name("clearEraserMaskCache")
+func clearEraserMaskCache()
+
+@_silgen_name("prepareDocumentImageLayers")
+func prepareDocumentImageLayers(_ json: UnsafePointer<CChar>, _ scale: Double) -> UnsafeMutableRawPointer?
+@_silgen_name("clearDocumentImageCache")
+func clearDocumentImageCache()
+@_silgen_name("installDocumentImageLayers")
+func installDocumentImageLayers(_ engine: OpaquePointer, _ prepared: UnsafeMutableRawPointer)
+@_silgen_name("installAnimatedDocumentImageLayers")
+func installAnimatedDocumentImageLayers(_ engine: OpaquePointer, _ prepared: UnsafeMutableRawPointer)
+@_silgen_name("documentImageLayersAreAnimated")
+func documentImageLayersAreAnimated(_ prepared: UnsafeMutableRawPointer) -> Bool
+@_silgen_name("snapshotDocumentImageLayers")
+func snapshotDocumentImageLayers(_ engine: OpaquePointer) -> UnsafeMutableRawPointer?
+@_silgen_name("advanceDocumentImageLayers")
+func advanceDocumentImageLayers(_ prepared: UnsafeMutableRawPointer, _ time: Double) -> Int32
+@_silgen_name("releaseDocumentImageLayers")
+func releaseDocumentImageLayers(_ prepared: UnsafeMutableRawPointer)
+@_silgen_name("reserveDocumentLayerOrder")
+func reserveDocumentLayerOrder(_ engine: OpaquePointer) -> UInt64
 
 // MARK: - Predictive Touch (Apple Pencil low-latency rendering)
 @_silgen_name("clearPredictedPoints")
@@ -82,6 +137,9 @@ func renderToCanvas(_ engine: OpaquePointer, _ canvas: OpaquePointer)
 @_silgen_name("renderVisibleViewportToCanvas")
 func renderVisibleViewportToCanvas(_ engine: OpaquePointer, _ canvas: OpaquePointer)
 
+@_silgen_name("renderToDisplayCanvas")
+func renderToDisplayCanvas(_ engine: OpaquePointer, _ canvas: OpaquePointer, _ cropped: Bool, _ dark: Bool)
+
 @_silgen_name("renderToCanvasForExport")
 func renderToCanvasForExport(_ engine: OpaquePointer, _ canvas: OpaquePointer)
 
@@ -112,6 +170,10 @@ func renderToGaneshMetalTexture(
 ) -> Bool
 
 // MARK: - Skia Canvas Helpers
+@_silgen_name("renderToGaneshMetalTextureForDisplay")
+func renderToGaneshMetalTextureForDisplay(_ engine: OpaquePointer, _ context: OpaquePointer,
+  _ texture: UnsafeMutableRawPointer, _ width: Int32, _ height: Int32, _ cropped: Bool, _ dark: Bool) -> Bool
+
 @_silgen_name("createSkiaCanvas")
 func createSkiaCanvas(_ pixels: UnsafeMutableRawPointer, _ width: Int32, _ height: Int32, _ rowBytes: Int32) -> OpaquePointer?
 
@@ -145,6 +207,9 @@ func moveSelection(_ engine: OpaquePointer, _ dx: Float, _ dy: Float)
 
 @_silgen_name("finalizeMove")
 func finalizeMove(_ engine: OpaquePointer)
+
+@_silgen_name("cancelSelectionMove")
+func cancelSelectionMove(_ engine: OpaquePointer)
 
 @_silgen_name("beginSelectionTransform")
 func beginSelectionTransform(_ engine: OpaquePointer, _ handleIndex: Int32)
@@ -229,6 +294,9 @@ func commitExternalEdit(_ engine: OpaquePointer, _ before: UnsafePointer<CChar>,
 func undoExternalEdit(_ engine: OpaquePointer) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("redoExternalEdit")
 func redoExternalEdit(_ engine: OpaquePointer) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("replaceDrawingSnapshot")
+func replaceDrawingSnapshot(_ engine: OpaquePointer, _ snapshot: UnsafeMutableRawPointer) -> Bool
 
 @_silgen_name("snapshotDrawing")
 func snapshotDrawing(_ engine: OpaquePointer) -> OpaquePointer?

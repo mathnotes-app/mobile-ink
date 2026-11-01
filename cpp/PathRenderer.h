@@ -33,6 +33,7 @@ struct IncrementalResult {
 class PathRenderer {
 public:
     PathRenderer() = default;
+    static void warmCrayonTextures();
 
     // Draw a variable-width path based on point data
     // applyPressureAlpha: If true, modulates alpha based on average pressure
@@ -191,6 +192,8 @@ public:
 
     // Clear cached shaders (call when switching colors or resetting)
     void clearShaderCache();
+    void inheritShaderCacheFrom(const PathRenderer& other);
+    bool mergeShaderCacheFrom(const PathRenderer& other);
 
 private:
     // Number of interpolated points between each input point pair

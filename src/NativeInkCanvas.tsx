@@ -28,6 +28,9 @@ import {
   MobileInkCanvasViewNative,
   MobileInkModule,
   supportsRenderBackendProp,
+  supportsInkDisplayAppearance,
+  supportsHoldToShapeProp,
+  supportsViewportMotionProp,
 } from "./native-ink-canvas/nativeModules";
 import type {
   NativeInkCanvasProps,
@@ -113,6 +116,18 @@ export const NativeInkCanvas = forwardRef<
       }
       if (!MobileInkModule?.recordExternalEdit) throw new Error('Native overlay history is unavailable');
       return MobileInkModule.recordExternalEdit(node, before, after);
+    },
+
+    reserveLayerOrder: async (): Promise<number> => {
+      const node = findNodeHandle(nativeRef.current);
+      if (!node || Platform.OS !== 'ios' || !MobileInkCanvasViewManager?.reserveLayerOrder)
+        throw new Error('Image layering is unavailable');
+      return new Promise((resolve, reject) => {
+        MobileInkCanvasViewManager.reserveLayerOrder(node, (order: number | null) => {
+          if (!Number.isSafeInteger(order) || !order || order < 1) reject(new Error('Unable to reserve an image layer'));
+          else resolve(order);
+        });
+      });
     },
 
     undo: () => {
@@ -612,15 +627,23 @@ export const NativeInkCanvas = forwardRef<
     onDrawingBegin: props.onDrawingBegin,
     onInkSelectionChange: props.onSelectionChange,
     backgroundType: props.backgroundType,
+    ...(Platform.OS === 'ios' && props.documentImageLayersJSON !== undefined
+      ? { documentImageLayersJSON: props.documentImageLayersJSON, onImageLayersError: props.onImageLayersError,
+        onImageLayersReady: props.onImageLayersReady } : {}),
+    ...(supportsInkDisplayAppearance ? { displayAppearance: props.displayAppearance ?? 'light' } : {}),
     pdfBackgroundUri: props.pdfBackgroundUri,
     renderSuspended: props.renderSuspended,
     drawingPolicy: props.drawingPolicy,
+    ...(supportsHoldToShapeProp ? { holdToShapeEnabled: props.holdToShapeEnabled ?? true } : {}),
+    ...(supportsViewportMotionProp ? { viewportMotionActive: props.viewportMotionActive ?? false } : {}),
     continuousDocument: props.continuousDocument ?? false,
     renderScale: props.renderScale ?? 1,
     renderViewportLeftRatio: props.renderViewportLeftRatio ?? 0,
     renderViewportTopRatio: props.renderViewportTopRatio ?? 0,
     renderViewportWidthRatio: props.renderViewportWidthRatio ?? 1,
     renderViewportHeightRatio: props.renderViewportHeightRatio ?? 1,
+    ...(Platform.OS === 'ios'
+      ? { zoomPreparationTarget: props.zoomPreparationTarget ?? null, onZoomPreparationReady: props.onZoomPreparationReady } : {}),
     onPencilDoubleTap: props.onPencilDoubleTap,
     ...(supportsRenderBackendProp
       ? { renderBackend: props.renderBackend ?? DEFAULT_NATIVE_INK_RENDER_BACKEND }

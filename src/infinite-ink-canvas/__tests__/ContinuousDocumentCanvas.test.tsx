@@ -7,10 +7,12 @@ const mockCapture = jest.fn(async (_count: number, _height: number) => ['first',
 const mockClear = jest.fn();
 const mockRecordExternal = jest.fn(async () => true);
 let mockProps: any;
+let mockViewportProps: any;
 jest.mock('react-native-gesture-handler', () => ({ GestureHandlerRootView: require('react-native').View }));
 jest.mock('../PageStack', () => ({ PageBackgrounds: () => null, PageBreaks: () => null }));
 jest.mock('../../ZoomableInkViewport', () => ({ __esModule: true,
   default: require('react').forwardRef((props: any, ref: any) => {
+    mockViewportProps = props;
     require('react').useImperativeHandle(ref, () => ({ setTransform: jest.fn() }));
     return <>{props.children}</>;
   }),
@@ -37,6 +39,93 @@ async function setup() {
   return { ref, changed, tree: tree! };
 }
 beforeEach(() => { jest.clearAllMocks(); });
+it('forwards finger taps only when finger drawing is disabled', async () => {
+  const onContentTap = jest.fn();
+  const tool = { toolType: 'pen' as const, width: 2, color: '#000000', eraserMode: 'pixel' as const };
+  const tree = render(<ContinuousDocumentCanvas initialData={data} toolState={tool}
+    fingerDrawingEnabled={false} onContentTap={onContentTap} />);
+  await act(async () => {});
+  expect(mockViewportProps.onContentTap).toBe(onContentTap);
+  tree.rerender(<ContinuousDocumentCanvas initialData={data} toolState={tool}
+    fingerDrawingEnabled onContentTap={onContentTap} />);
+  expect(mockViewportProps.onContentTap).toBeUndefined();
+  tree.unmount();
+});
+it('uses cached ink during movement and requests full quality after it settles', async () => {
+  const { tree } = await setup();
+  expect(mockProps.viewportMotionActive).toBe(false);
+  act(() => mockViewportProps.onMotionStateChange(true));
+  expect(mockProps.viewportMotionActive).toBe(true);
+  act(() => mockViewportProps.onMotionStateChange(false));
+  expect(mockProps.viewportMotionActive).toBe(false);
+  tree.unmount();
+});
+it('uses a prepared sharp target during a pinch only while it still covers the current zoom', async () => {
+  const { tree } = await setup();
+  const transform = (scale: number) => ({ scale, translateX: 0, translateY: 0, containerWidth: 600, containerHeight: 800 });
+  act(() => { mockViewportProps.onMotionStateChange(true); mockViewportProps.onTransformChange(transform(2)); });
+  const prepared = mockProps.zoomPreparationTarget;
+  expect(JSON.parse(prepared).renderScale).toBe(2);
+  expect(mockProps.renderScale).toBe(1);
+  act(() => mockProps.onZoomPreparationReady({ nativeEvent: { json: prepared } }));
+  expect(mockProps.renderScale).toBe(2);
+  act(() => mockViewportProps.onTransformChange(transform(3)));
+  expect(JSON.parse(mockProps.zoomPreparationTarget).renderScale).toBe(3);
+  act(() => mockProps.onZoomPreparationReady({ nativeEvent: { json: prepared } }));
+  expect(mockProps.renderScale).toBe(2);
+  act(() => mockProps.onZoomPreparationReady({ nativeEvent: { json: '{"renderScale":3}' } }));
+  expect(mockProps.renderScale).toBe(2);
+  act(() => mockViewportProps.onTransformChange(transform(1)));
+  expect(mockProps.zoomPreparationTarget).toBeUndefined();
+  act(() => mockProps.onZoomPreparationReady({ nativeEvent: { json: prepared } }));
+  expect(mockProps.renderScale).toBe(2);
+  tree.unmount();
+});
+it('does not schedule Metal zoom preparation for the CPU renderer', async () => {
+  const tree = render(<ContinuousDocumentCanvas initialData={data} renderBackend="cpu"
+    toolState={{ toolType: 'pen', width: 2, color: '#000000', eraserMode: 'pixel' }} />);
+  await act(async () => {});
+  act(() => { mockViewportProps.onMotionStateChange(true); mockViewportProps.onTransformChange({ scale: 2,
+    translateX: 0, translateY: 0, containerWidth: 600, containerHeight: 800 }); });
+  expect(mockProps.zoomPreparationTarget).toBeUndefined();
+  tree.unmount();
+});
+it('prewarms the next zoom level without changing the displayed surface while idle', async () => {
+  jest.useFakeTimers();
+  try {
+    const { tree } = await setup();
+    act(() => mockViewportProps.onTransformChange({ scale: 1, translateX: 0, translateY: 0,
+      containerWidth: 600, containerHeight: 800 }));
+    act(() => jest.advanceTimersByTime(700));
+    const prepared = mockProps.zoomPreparationTarget;
+    expect(JSON.parse(prepared)).toMatchObject({ renderScale: 1.5, prefetch: true });
+    act(() => mockProps.onZoomPreparationReady({ nativeEvent: { json: prepared } }));
+    expect(mockProps.renderScale).toBe(1);
+    act(() => mockProps.onDrawingBegin({ nativeEvent: { y: 100 } }));
+    expect(mockProps.zoomPreparationTarget).toBeUndefined();
+    act(() => jest.advanceTimersByTime(1000));
+    expect(mockProps.zoomPreparationTarget).toBeUndefined();
+    act(() => mockProps.onDrawingChange({ nativeEvent: { completedStrokeTool: 'pen' } }));
+    act(() => jest.advanceTimersByTime(700));
+    expect(JSON.parse(mockProps.zoomPreparationTarget)).toMatchObject({ prefetch: true });
+    act(() => { mockViewportProps.onMotionStateChange(true); mockViewportProps.onTransformChange({ scale: 1.5,
+      translateX: 0, translateY: 0, containerWidth: 600, containerHeight: 800 }); });
+    expect(JSON.parse(mockProps.zoomPreparationTarget)).not.toHaveProperty('prefetch');
+    tree.unmount();
+  } finally { jest.useRealTimers(); }
+});
+it('keeps overlays below ink while drawing and makes them selectable with the lasso', async () => {
+  const tool = {toolType: 'pen' as const, width: 2, color: '#000000', eraserMode: 'pixel' as const};
+  const tree = render(<ContinuousDocumentCanvas initialData={data} toolState={tool} />);
+  await act(async () => {});
+  expect(tree.getByTestId('continuous-document-overlay').props.pointerEvents).toBe('none');
+  expect(mockProps.style.zIndex).toBe(1);
+  expect(require('react-native').StyleSheet.flatten(tree.getByTestId('continuous-document-overlay').props.style).zIndex).toBe(0);
+  tree.rerender(<ContinuousDocumentCanvas initialData={data} toolState={{...tool, toolType: 'select'}} />);
+  expect(tree.getByTestId('continuous-document-overlay').props.pointerEvents).toBe('box-none');
+  expect(require('react-native').StyleSheet.flatten(tree.getByTestId('continuous-document-overlay').props.style).zIndex).toBe(2);
+  tree.unmount();
+});
 it('retains blank pages and captures the whole document in order', async () => {
   const { ref, tree } = await setup();
   expect(mockLoad.mock.calls[0][0]).toHaveLength(2);
@@ -148,6 +237,22 @@ it('routes external undo patches without dirtying ink or appending a page', asyn
   tree.unmount();
 });
 
+it('reports completed strokes without treating history or cancellation as a stroke', async () => {
+  const ended = jest.fn();
+  const tree = render(<ContinuousDocumentCanvas initialData={data} onStrokeEnd={ended}
+    toolState={{ toolType: 'eraser', width: 10, color: '#000000', eraserMode: 'pixel' }} />);
+  await act(async () => {});
+  act(() => {
+    mockProps.onDrawingBegin({ nativeEvent: { x: 10, y: 10 } });
+    mockProps.onDrawingChange({ nativeEvent: { completedStrokeTool: 'eraser' } });
+    mockProps.onDrawingChange({ nativeEvent: { historyAction: 'undo' } });
+    mockProps.onDrawingChange({ nativeEvent: {} });
+  });
+  expect(ended).toHaveBeenCalledTimes(1);
+  expect(ended).toHaveBeenCalledWith('eraser');
+  tree.unmount();
+});
+
 it('keeps persistence blocked after a failed replacement until a successful retry', async () => {
   const {ref, tree} = await setup();
   mockLoad.mockRejectedValueOnce(new Error('native load failed'));
@@ -177,4 +282,14 @@ it('does not reparse the initial notebook when tools or viewport state rerender 
   expect(parse.mock.calls.filter(([input]) => input === raw)).toHaveLength(initialCalls);
   tree.unmount();
   parse.mockRestore();
+});
+
+it('excludes host overlay gestures from viewport panning while keeping blank margins available', async () => {
+  const blockedTouchRects = [{left: 100, top: 200, right: 400, bottom: 500}];
+  const tree = render(<ContinuousDocumentCanvas initialData={data} blockedTouchRects={blockedTouchRects}
+    toolState={{toolType: 'pen', width: 2, color: '#000000', eraserMode: 'pixel'}} />);
+  await act(async () => {});
+  expect(mockViewportProps.blockedTouchRects).toEqual(blockedTouchRects);
+  expect(mockViewportProps.singleFingerPanBlocked).toBe(false);
+  tree.unmount();
 });

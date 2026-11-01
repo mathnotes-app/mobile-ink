@@ -29,6 +29,27 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
   }
 
   // Event handlers - forward to drawing view
+  @objc var holdToShapeEnabled: Bool = true {
+    didSet { drawingView?.holdToShapeEnabled = holdToShapeEnabled }
+  }
+  @objc var viewportMotionActive: Bool = false {
+    didSet { drawingView?.viewportMotionActive = viewportMotionActive }
+  }
+  @objc var documentImageLayersJSON: String? {
+    didSet { drawingView?.documentImageLayersJSON = documentImageLayersJSON }
+  }
+  @objc var onImageLayersError: RCTDirectEventBlock? {
+    didSet { drawingView?.onImageLayersError = onImageLayersError }
+  }
+  @objc var onImageLayersReady: RCTDirectEventBlock? {
+    didSet { drawingView?.onImageLayersReady = onImageLayersReady }
+  }
+  @objc var zoomPreparationTarget: String? {
+    didSet { drawingView?.zoomPreparationTarget = zoomPreparationTarget }
+  }
+  @objc var onZoomPreparationReady: RCTDirectEventBlock? {
+    didSet { drawingView?.onZoomPreparationReady = onZoomPreparationReady }
+  }
   @objc var onDrawingChange: RCTDirectEventBlock? {
     didSet {
       drawingView?.onDrawingChange = onDrawingChange
@@ -54,6 +75,13 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
   }
 
   // Background properties - forward to background view AND drawing view engine
+  @objc var displayAppearance: String? {
+    didSet {
+      drawingView?.darkDisplay = displayAppearance == "dark"
+      backgroundView?.isDarkMode = displayAppearance == "dark"
+    }
+  }
+
   @objc var backgroundType: String? {
     didSet {
       if let type = backgroundType {
@@ -131,6 +159,14 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
 
   func setDrawingView(_ view: MobileInkCanvasView) {
     self.drawingView = view
+    view.holdToShapeEnabled = holdToShapeEnabled
+    view.viewportMotionActive = viewportMotionActive
+    view.onImageLayersError = onImageLayersError
+    view.onImageLayersReady = onImageLayersReady
+    view.documentImageLayersJSON = documentImageLayersJSON
+    view.zoomPreparationTarget = zoomPreparationTarget
+    view.onZoomPreparationReady = onZoomPreparationReady
+    view.darkDisplay = displayAppearance == "dark"
     // Forward any properties that were set before the drawing view was added
     if let handler = onDrawingChange {
       view.onDrawingChange = handler
@@ -166,6 +202,7 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
 
   func setMobileInkBackgroundView(_ view: MobileInkBackgroundView) {
     self.backgroundView = view
+    view.isDarkMode = displayAppearance == "dark"
     view.isHidden = continuousDocument
     // Forward any properties that were set before the background view was added
     if let type = backgroundType {
@@ -203,7 +240,7 @@ class MobileInkCanvasViewManager: RCTViewManager {
     containerView.addSubview(backgroundView)
 
     // Create and add drawing view on top (transparent Metal view)
-    let drawingView = MobileInkCanvasView(frame: .zero, device: MTLCreateSystemDefaultDevice())
+    let drawingView = MobileInkCanvasView(frame: .zero, device: nil)
     // Drawing geometry is set from the visible document rectangle.
     drawingView.autoresizingMask = []
     drawingView.backgroundView = backgroundView // Set reference for export
@@ -258,6 +295,16 @@ class MobileInkCanvasViewManager: RCTViewManager {
     }
   }
 
+  @objc func reserveLayerOrder(_ node: NSNumber, callback: @escaping RCTResponseSenderBlock) {
+    DispatchQueue.main.async {
+      guard let container = self.bridge.uiManager.view(forReactTag: node),
+            let view = self.findDrawingView(container), let engine = view.drawingEngine else {
+        callback([NSNull()]); return
+      }
+      callback([NSNumber(value: reserveDocumentLayerOrder(engine))])
+    }
+  }
+
   @objc func undo(_ node: NSNumber) {
     DispatchQueue.main.async {
       if let container = self.bridge.uiManager.view(forReactTag: node),
@@ -304,6 +351,16 @@ class MobileInkCanvasViewManager: RCTViewManager {
           let view = findDrawingView(container),
           let snapshot = view.takeDrawingSnapshot() else { return nil }
     return UnsafeMutableRawPointer(snapshot)
+  }
+
+  // Called synchronously on the main queue while the bridge owns the pointer.
+  @objc func loadPreparedDrawing(_ node: NSNumber, snapshot: UnsafeMutableRawPointer, callback: @escaping RCTResponseSenderBlock) {
+    guard let container = bridge.uiManager.view(forReactTag: node),
+          let view = findDrawingView(container) else {
+      callback([NSNull(), false])
+      return
+    }
+    view.loadPreparedDrawing(snapshot, callback: callback)
   }
 
   @objc func loadBase64Data(_ node: NSNumber, base64String: String, callback: @escaping RCTResponseSenderBlock) {

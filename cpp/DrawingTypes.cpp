@@ -37,6 +37,7 @@ void Stroke::ensureEraserCacheValid() const {
     // Always rebuild from scratch to match live eraser rendering exactly.
     cachedEraserPath.reset();
     cachedEraserCount = 0;
+    cachedEraserOptimized = false;
 
     if (erasedBy.empty()) {
         return;
@@ -50,6 +51,7 @@ void Stroke::ensureEraserCacheValid() const {
     for (size_t i = 0; i <= erasedBy.size(); ++i) {
         bool isLast = (i == erasedBy.size());
         bool breakStroke = isLast;
+        bool bridgeRadiusChange = false;
 
         if (!isLast && i > strokeStart) {
             float dx = erasedBy[i].x - erasedBy[i - 1].x;
@@ -58,6 +60,11 @@ void Stroke::ensureEraserCacheValid() const {
             float avgRadius = (erasedBy[i].radius + erasedBy[i - 1].radius) / 2.0f;
             if (dist > avgRadius * STROKE_BREAK_FACTOR) {
                 breakStroke = true;
+            } else if (std::fabs(erasedBy[i].radius - erasedBy[strokeStart].radius) > 0.0001f) {
+                // A stroked path has a single width. Starting a new run
+                // preserves both radii; bridge their ends as the live eraser does.
+                breakStroke = true;
+                bridgeRadiusChange = dist > 0.0001f;
             }
         }
 
@@ -97,6 +104,22 @@ void Stroke::ensureEraserCacheValid() const {
                 }
             }
 
+            if (bridgeRadiusChange) {
+                const auto& previous = erasedBy[i - 1];
+                const auto& next = erasedBy[i];
+                const float dx = next.x - previous.x;
+                const float dy = next.y - previous.y;
+                const float length = std::sqrt(dx * dx + dy * dy);
+                const float nx = -dy / length;
+                const float ny = dx / length;
+                SkPath bridge;
+                bridge.moveTo(previous.x + nx * previous.radius, previous.y + ny * previous.radius);
+                bridge.lineTo(previous.x - nx * previous.radius, previous.y - ny * previous.radius);
+                bridge.lineTo(next.x - nx * next.radius, next.y - ny * next.radius);
+                bridge.lineTo(next.x + nx * next.radius, next.y + ny * next.radius);
+                bridge.close();
+                cachedEraserPath.addPath(bridge);
+            }
             strokeStart = i;
         }
     }

@@ -52,6 +52,7 @@ export type ContinuousEnginePoolRef = {
 };
 
 export type ContinuousEnginePoolProps = {
+  displayAppearance?: import('../displayAppearance').InkDisplayAppearance;
   pageWidth: number;
   canvasHeight: number;
   contentPadding: number;
@@ -121,6 +122,7 @@ export type PooledCanvasSlotHandle = {
 };
 
 export type PooledCanvasSlotProps = {
+  displayAppearance?: import('../displayAppearance').InkDisplayAppearance;
   poolIndex: number;
   pageWidth: number;
   canvasHeight: number;

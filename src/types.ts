@@ -31,6 +31,7 @@ export type InkTextBox = {
   color: string;
   fontSize?: number;
   isEditing?: boolean;
+  layerOrder?: number;
 };
 
 export type InsertedElement = {
@@ -43,6 +44,8 @@ export type InsertedElement = {
   rotation?: number;
   locked?: boolean;
   zIndex?: number;
+  /** Global ordering relative to ink; absent on legacy images. */
+  layerOrder?: number;
   createdAt?: string;
   updatedAt?: string;
   sourceUri?: string;

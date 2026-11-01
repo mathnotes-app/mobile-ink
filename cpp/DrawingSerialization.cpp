@@ -14,6 +14,10 @@ constexpr uint32_t MAX_POINTS_PER_STROKE = 1000000;
 constexpr uint32_t MAX_AFFECTED_INDICES = 1000000;
 constexpr uint32_t MAX_TOOL_TYPE_LENGTH = 1024;
 constexpr uint32_t MAX_ERASED_BY_CIRCLES = 1000000;
+#ifdef MOBILE_INK_ANDROID_LAYER_TRAILER
+constexpr char LAYER_TRAILER_MAGIC[] = {'M', 'I', 'L', 'A', 'Y', 'E', 'R', '1'};
+constexpr uint64_t MAX_LAYER_ORDER = 9007199254740990ULL;
+#endif
 }
 
 std::vector<uint8_t> DrawingSerialization::serialize(const std::vector<Stroke>& strokes) {
@@ -92,6 +96,18 @@ std::vector<uint8_t> DrawingSerialization::serialize(const std::vector<Stroke>& 
         }
     }
 
+#ifdef MOBILE_INK_ANDROID_LAYER_TRAILER
+    // Android's view and document codec exchange binary snapshots internally.
+    // Preserve layer order there while remaining readable by legacy v4 readers.
+    if (std::any_of(strokes.begin(), strokes.end(), [](const Stroke& stroke) { return stroke.layerOrder != 0; })) {
+        for (const auto& stroke : strokes) {
+            const auto* bytes = reinterpret_cast<const uint8_t*>(&stroke.layerOrder);
+            buffer.insert(buffer.end(), bytes, bytes + sizeof(stroke.layerOrder));
+        }
+        writeUint32(buffer, static_cast<uint32_t>(strokes.size()));
+        buffer.insert(buffer.end(), std::begin(LAYER_TRAILER_MAGIC), std::end(LAYER_TRAILER_MAGIC));
+    }
+#endif
     return buffer;
 }
 
@@ -333,6 +349,25 @@ bool DrawingSerialization::deserialize(
         printf("[C++] Drawing payload read past end of buffer\n");
         return false;
     }
+
+#ifdef MOBILE_INK_ANDROID_LAYER_TRAILER
+    constexpr size_t footerBytes = sizeof(uint32_t) + sizeof(LAYER_TRAILER_MAGIC);
+    if (data.size() >= footerBytes &&
+        std::memcmp(data.data() + data.size() - sizeof(LAYER_TRAILER_MAGIC), LAYER_TRAILER_MAGIC, sizeof(LAYER_TRAILER_MAGIC)) == 0) {
+        uint32_t count = 0;
+        std::memcpy(&count, data.data() + data.size() - footerBytes, sizeof(count));
+        if (count != strokes.size() || count > (data.size() - footerBytes) / sizeof(uint64_t) ||
+            data.size() - footerBytes - count * sizeof(uint64_t) != offset) return false;
+        size_t layerOffset = offset;
+        for (auto& stroke : strokes) {
+            uint64_t order = 0;
+            std::memcpy(&order, data.data() + layerOffset, sizeof(order));
+            if (order > MAX_LAYER_ORDER) return false;
+            stroke.layerOrder = order;
+            layerOffset += sizeof(order);
+        }
+    }
+#endif
 
     return true;
 }

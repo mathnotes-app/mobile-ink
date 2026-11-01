@@ -8,11 +8,13 @@
 
 // Use angle brackets to force system search paths (not CocoaPods symlinks)
 #include <include/core/SkCanvas.h>
+#include <include/core/SkColorFilter.h>
 #include <include/core/SkSurface.h>
 #include <include/core/SkPath.h>
 #include <include/core/SkPaint.h>
 #include <include/core/SkColor.h>
 #include <include/core/SkImage.h>
+#include <include/core/SkPicture.h>
 #include <include/core/SkPathMeasure.h>
 #include <include/core/SkPathUtils.h>
 #include <SkPathOps.h>
@@ -21,6 +23,8 @@
 #include <mutex>
 #include <cstdint>
 #include "DrawingTypes.h"
+
+class GrDirectContext;
 
 namespace nativedrawing {
 
@@ -33,6 +37,8 @@ class EraserRenderer;
 class StrokeSplitter;
 class BatchExporter;
 class ActiveStrokeRenderer;
+struct EraserMaskOptimizationBatch;
+struct StrokeTilePreparation;
 
 class SkiaDrawingEngine {
 public:
@@ -47,6 +53,7 @@ public:
     void touchMoved(float x, float y, float pressure, float azimuth = 0.0f, float altitude = 1.57f, long timestamp = 0, bool isPencilInput = false);
     void touchEnded(long timestamp = 0);
     bool updateHoldShapePreview(long timestamp);
+    void setHoldToShapeEnabled(bool enabled);
 
     // Predictive touch support (Apple Pencil low-latency rendering)
     void clearPredictedPoints();  // Remove predicted points before adding new actual data
@@ -55,6 +62,12 @@ public:
     // Canvas operations
     void clear();
     bool clearDocumentPage(int pageIndex, float pageHeight);
+    uint64_t reserveLayerOrder();
+    void includeLayerOrder(uint64_t order);
+    void setImageLayers(std::vector<ImageLayer> images);
+    std::vector<ImageLayer> snapshotImageLayers();
+    bool hasImageLayers() const;
+    void setInkDisplayTransform(bool dark, bool swapRedBlue);
     // Returns an opaque overlay patch for external edits, or empty for ink/no-op.
     std::string undo();
     std::string redo();
@@ -103,6 +116,12 @@ public:
         float visibleWidth,
         float visibleHeight
     );
+    void setViewportMotionActive(bool active);
+    std::unique_ptr<StrokeTilePreparation> prepareStrokeTiles(float scale, float left, float top, float width, float height);
+    bool installPreparedStrokeTile(StrokeTilePreparation& preparation);
+    bool hasPreparedStrokeTiles(const StrokeTilePreparation& preparation);
+    static int renderPreparedStrokeTile(StrokeTilePreparation& preparation, SkCanvas* canvas, GrDirectContext* context);
+    static int renderPreparedStrokeTileImage(StrokeTilePreparation& preparation, SkCanvas* canvas, sk_sp<SkImage>& image);
     sk_sp<SkImage> makeSnapshot();
 
     // Batch export: Render multiple pages to PNG without creating new engine each time
@@ -123,7 +142,11 @@ public:
     std::vector<uint8_t> serializeDrawing();
     // Copy committed strokes under the state lock; encode the independent copy off-thread.
     std::vector<Stroke> snapshotDrawing();
+    std::unique_ptr<EraserMaskOptimizationBatch> snapshotEraserMasks();
+    bool installOptimizedEraserMask(const EraserMaskOptimizationBatch& batch);
     bool deserializeDrawing(const std::vector<uint8_t>& data);
+    // Swap already decoded geometry into the engine; caller retains old strokes.
+    void replaceDrawing(std::vector<Stroke>& preparedStrokes);
 
     // State queries
     bool canUndo() const;
@@ -185,6 +208,14 @@ private:
 
     // Completed strokes
     std::vector<Stroke> strokes_;
+    uint64_t layerSequence_ = 4;
+    std::vector<ImageLayer> imageLayers_;
+    void renderImageLayer(SkCanvas* canvas, const ImageLayer& image);
+    SkPaint displayInkPaint(const SkPaint& paint);
+    bool displayInkDark_ = false;
+    bool displayInkSwap_ = false;
+    sk_sp<SkColorFilter> displayInkFilter_;
+    std::unordered_map<SkColor, SkColor> displayInkColors_;
 
     // Pixel eraser circles - applied during rendering to punch holes
     std::vector<EraserCircle> eraserCircles_;
@@ -215,6 +246,21 @@ private:
     sk_sp<SkImage> nonSelectedSnapshot_;
     sk_sp<SkImage> selectedSnapshot_;           // Cache selected strokes for O(1) drag
     sk_sp<SkImage> selectionHighlightSnapshot_; // Cache selection highlight too
+
+    // Ordered snapshots for continuous-document selection drags. Keeping
+    // separate runs preserves image and ink stacking while selected runs move.
+    struct SelectionDragLayer {
+        sk_sp<SkImage> image;
+        SkRect bounds;
+        bool selected = false;
+        SkBlendMode blendMode = SkBlendMode::kSrcOver;
+    };
+    std::vector<SelectionDragLayer> selectionDragLayers_;
+    std::unordered_set<size_t> selectionDragIndices_;
+    SkRect selectionDragCoverage_ = SkRect::MakeEmpty();
+    const void* selectionDragContext_ = nullptr;
+    float selectionDragScale_ = 0;
+    uint64_t selectionDragEpoch_ = 0;
 
     // Offscreen surface for rendering strokes only (transparent background)
     // Background patterns are drawn directly to output canvas, not this surface
@@ -250,12 +296,34 @@ private:
         sk_sp<SkImage> image;
         size_t bytes = 0;
         uint64_t lastUsed = 0;
+        std::vector<size_t> appendedStrokes;
     };
 
     std::unordered_map<StrokeTileKey, StrokeTileEntry, StrokeTileKeyHasher> strokeTileCache_;
     uint64_t strokeTileEpoch_ = 1;
+    uint64_t strokeTileContentRevision_ = 1;
+    std::shared_ptr<const uint8_t> strokeTileIdentity_ = std::make_shared<const uint8_t>(0);
     uint64_t strokeTileUseCounter_ = 0;
     size_t strokeTileCacheBytes_ = 0;
+    struct StrokePictureKey {
+        uint32_t pathID, color, widthBits;
+        bool operator==(const StrokePictureKey& other) const {
+            return pathID == other.pathID && color == other.color && widthBits == other.widthBits;
+        }
+    };
+    struct StrokePictureKeyHasher {
+        size_t operator()(const StrokePictureKey& key) const {
+            return (static_cast<uint64_t>(key.pathID) * 1315423911u ^ key.color) * 1315423911u ^ key.widthBits;
+        }
+    };
+    struct StrokePictureEntry { sk_sp<SkPicture> picture; size_t bytes; uint64_t used; };
+    struct StrokePictureCache {
+        std::unordered_map<StrokePictureKey, StrokePictureEntry, StrokePictureKeyHasher> entries;
+        size_t bytes = 0;
+        uint64_t useCounter = 0;
+    };
+    StrokePictureCache crayonPictureCache_;
+    StrokePictureCache penPictureCache_;
     float renderScale_ = 1.0f;
     float visibleLeft_ = 0.0f;
     float visibleTop_ = 0.0f;
@@ -302,6 +370,8 @@ private:
     std::unique_ptr<ActiveStrokeRenderer> activeStrokeRenderer_;
 
     bool hasActiveShapePreview_ = false;
+    bool holdToShapeEnabled_ = true;
+    bool viewportMotionActive_ = false;
     std::string activeShapePreviewToolType_;
     std::vector<Point> activeShapePreviewPoints_;
     std::vector<Point> activeShapePreviewBasePoints_;
@@ -321,6 +391,8 @@ private:
     void markStrokeCachesDirty();
     void invalidateStrokeTilesForRect(const SkRect& bounds);
     void renderScaleAwareStrokes(SkCanvas* canvas);
+    bool renderCachedSelectionDrag(SkCanvas* canvas, float scale);
+    bool drawCachedStrokeTileFallback(SkCanvas* canvas, const StrokeTileKey& key, int tileWidth, int tileHeight);
     void renderActiveContent(SkCanvas* canvas);
     // Draw points as a single constant-width stroked centerline (highlighter/
     // marker). Uses cachedPath when non-empty, else smooths from points.
@@ -331,7 +403,10 @@ private:
         const SkPaint& paint
     );
     const void* strokeTileContext_ = nullptr;
-    sk_sp<SkImage> renderStrokeTile(SkCanvas* targetCanvas, const StrokeTileKey& key, int tileWidth, int tileHeight, float scale);
+    sk_sp<SkImage> renderStrokeTile(SkCanvas* targetCanvas, const StrokeTileKey& key, int tileWidth, int tileHeight, float scale, const std::vector<size_t>& candidates, std::unordered_map<size_t, sk_sp<SkPicture>>& strokePictures, const sk_sp<SkImage>& base = nullptr);
+    bool applyAppendedStrokes(SkCanvas* canvas, const StrokeTileKey& key, StrokeTileEntry& entry);
+    void appendStrokeToCachedTiles(const SkRect& bounds, size_t strokeIndex);
+    sk_sp<SkPicture> strokePicture(const Stroke& stroke, const SkPaint& paint);
     void pruneStrokeTileCache();
 
     // Pixel eraser stroke splitting - splits a stroke by removing portions that intersect the eraser

@@ -55,6 +55,11 @@ class MobileInkCanvasViewManager(private val reactContext: ReactApplicationConte
         view.drawingPolicy = policy ?: "default"
     }
 
+    @ReactProp(name = "holdToShapeEnabled", defaultBoolean = true)
+    fun setHoldToShapeEnabled(view: MobileInkCanvasView, enabled: Boolean) {
+        view.holdToShapeEnabled = enabled
+    }
+
     @ReactProp(name = "renderSuspended")
     fun setRenderSuspended(view: MobileInkCanvasView, suspended: Boolean) {
         view.renderSuspended = suspended
@@ -63,6 +68,11 @@ class MobileInkCanvasViewManager(private val reactContext: ReactApplicationConte
     @ReactProp(name = "renderBackend")
     fun setRenderBackend(view: MobileInkCanvasView, backend: String?) {
         view.renderBackend = backend ?: "ganesh"
+    }
+
+    @ReactProp(name = "displayAppearance")
+    fun setDisplayAppearance(view: MobileInkCanvasView, appearance: String?) {
+        view.displayAppearance = appearance ?: "light"
     }
 
     @ReactProp(name = "continuousDocument")

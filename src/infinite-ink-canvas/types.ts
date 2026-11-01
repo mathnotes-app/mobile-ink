@@ -41,6 +41,7 @@ export type InfiniteInkCanvasRef = {
 };
 
 export type InfiniteInkCanvasProps = {
+  displayAppearance?: import('../displayAppearance').InkDisplayAppearance;
   style?: StyleProp<ViewStyle>;
   initialData?: SerializedNotebookData | string;
   initialPageCount?: number;
@@ -50,6 +51,7 @@ export type InfiniteInkCanvasProps = {
   renderBackend?: NativeInkRenderBackend;
   pdfBackgroundBaseUri?: string;
   fingerDrawingEnabled?: boolean;
+  holdToShapeEnabled?: boolean;
   toolState: ContinuousEnginePoolToolState;
   minScale?: number;
   maxScale?: number;
@@ -61,6 +63,8 @@ export type InfiniteInkCanvasProps = {
    * while the canvas pans or zooms.
    */
   overlay?: ReactNode;
+  /** A short finger tap in untransformed viewport-content coordinates. */
+  onContentTap?: (event: { nativeEvent: { locationX: number; locationY: number; isZoomableContentTap: true } }) => void;
   onReady?: () => void;
   /** A page could not be safely saved/reassigned. Dirty ink remains in its slot. */
   onError?: (error: Error) => void;

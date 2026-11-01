@@ -1,13 +1,50 @@
 #include "PathRenderer.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 #include <include/core/SkColorFilter.h>
+#include <include/core/SkImage.h>
+#include <include/core/SkSamplingOptions.h>
+#include <include/core/SkSurface.h>
+#include <include/core/SkVertices.h>
 #include <include/effects/SkColorMatrix.h>
 #include <include/effects/SkPerlinNoiseShader.h>
 
 namespace nativedrawing {
+
+namespace {
+sk_sp<SkShader> makeCrayonNoiseTexture(float x, float y, int octaves, float seed) {
+    constexpr int side = 512;
+    auto surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(side, side));
+    if (!surface) return nullptr;
+    const SkISize tileSize = SkISize::Make(side, side);
+    auto noise = SkShaders::MakeTurbulence(x, y, octaves, seed, &tileSize);
+    if (!noise) return nullptr;
+    SkPaint paint;
+    paint.setShader(noise);
+    surface->getCanvas()->drawPaint(paint);
+    auto image = surface->makeImageSnapshot();
+    return image ? image->makeShader(SkTileMode::kRepeat, SkTileMode::kRepeat,
+                                     SkSamplingOptions(SkFilterMode::kLinear)) : nullptr;
+}
+
+struct CrayonTextures {
+    sk_sp<SkShader> grain = makeCrayonNoiseTexture(0.008f, 0.35f, 4, 0.0f);
+    sk_sp<SkShader> paper = makeCrayonNoiseTexture(0.12f, 0.12f, 3, 42.0f);
+};
+
+const CrayonTextures& crayonTextures() {
+    // Immutable raster textures are shared across canvases and GPU contexts.
+    static const CrayonTextures textures;
+    return textures;
+}
+} // namespace
+
+void PathRenderer::warmCrayonTextures() {
+    (void)crayonTextures();
+}
 
 sk_sp<SkShader> PathRenderer::createCrayonShader(SkColor baseColor, float pressure, float width, float strokeAngle) {
     // ===== CHECK SHADER CACHE FIRST =====
@@ -28,12 +65,9 @@ sk_sp<SkShader> PathRenderer::createCrayonShader(SkColor baseColor, float pressu
     float freqAlong = 0.008f;   // Very low = long continuous streaks
     float freqAcross = 0.35f;   // Very high = fine perpendicular detail (44:1 ratio)
 
-    sk_sp<SkShader> grainNoise = SkShaders::MakeTurbulence(
-        freqAlong, freqAcross,
-        4,      // High octaves for detail
-        0.0f,
-        nullptr
-    );
+    const auto& textures = crayonTextures();
+    sk_sp<SkShader> grainNoise = textures.grain
+        ? textures.grain : SkShaders::MakeTurbulence(freqAlong, freqAcross, 4, 0.0f, nullptr);
 
     // Rotate grain to follow stroke direction
     SkMatrix rotationMatrix;
@@ -43,12 +77,8 @@ sk_sp<SkShader> PathRenderer::createCrayonShader(SkColor baseColor, float pressu
 
     // ===== LAYER 2: PAPER GRAIN (finer) =====
     // Simulates paper texture that wax deposits on
-    sk_sp<SkShader> paperNoise = SkShaders::MakeTurbulence(
-        0.12f, 0.12f,  // Finer grain for paper texture
-        3,
-        42.0f,
-        nullptr
-    );
+    sk_sp<SkShader> paperNoise = textures.paper
+        ? textures.paper : SkShaders::MakeTurbulence(0.12f, 0.12f, 3, 42.0f, nullptr);
 
     // ===== COMBINE: Multiply creates realistic wax-on-paper =====
     sk_sp<SkShader> combinedNoise = SkShaders::Blend(
@@ -135,20 +165,27 @@ void PathRenderer::drawCrayonPath(
         batchPaint.setAntiAlias(false);  // No AA - let texture create rough edges
         batchPaint.setAlpha(255);
 
-        // Build path for this micro-batch
-        SkPath batchPath;
-        batchPath.moveTo(edges[batchStart].left);
-
-        for (size_t i = batchStart + 1; i <= batchEnd; i++) {
-            batchPath.lineTo(edges[i].left);
+        // Adjacent left/right edge pairs already define the strip. Supplying
+        // it directly avoids triangulating every pressure batch on the UI
+        // thread whenever a zoom tile is rendered.
+        std::array<SkPoint, (BATCH_SIZE + 1) * 2> vertices;
+        int vertexCount = 0;
+        for (size_t i = batchStart; i <= batchEnd; ++i) {
+            vertices[vertexCount++] = edges[i].left;
+            vertices[vertexCount++] = edges[i].right;
         }
-
-        for (int i = static_cast<int>(batchEnd); i >= static_cast<int>(batchStart); i--) {
-            batchPath.lineTo(edges[i].right);
+        auto mesh = SkVertices::MakeCopy(SkVertices::kTriangleStrip_VertexMode,
+            vertexCount, vertices.data(), nullptr, nullptr);
+        if (mesh) {
+            canvas->drawVertices(mesh, SkBlendMode::kModulate, batchPaint);
+        } else {
+            SkPath path;
+            path.moveTo(edges[batchStart].left);
+            for (size_t i = batchStart + 1; i <= batchEnd; ++i) path.lineTo(edges[i].left);
+            for (size_t i = batchEnd + 1; i-- > batchStart;) path.lineTo(edges[i].right);
+            path.close();
+            canvas->drawPath(path, batchPaint);
         }
-
-        batchPath.close();
-        canvas->drawPath(batchPath, batchPaint);
     }
 
     // ===== TEXTURED END CAPS =====
@@ -463,6 +500,19 @@ uint64_t PathRenderer::getShaderCacheKey(SkColor color, float pressure, float an
 
 void PathRenderer::clearShaderCache() {
     shaderCache_.clear();
+}
+
+void PathRenderer::inheritShaderCacheFrom(const PathRenderer& other) {
+    shaderCache_ = other.shaderCache_;
+}
+
+bool PathRenderer::mergeShaderCacheFrom(const PathRenderer& other) {
+    for (const auto& [key, shader] : other.shaderCache_) {
+        auto found = shaderCache_.find(key);
+        if (found != shaderCache_.end() && found->second.get() != shader.get()) return false;
+    }
+    for (const auto& [key, shader] : other.shaderCache_) shaderCache_.emplace(key, shader);
+    return true;
 }
 
 IncrementalResult PathRenderer::drawCrayonPathIncremental(

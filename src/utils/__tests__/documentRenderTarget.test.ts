@@ -55,6 +55,14 @@ describe('continuous document render target', () => {
     expect(out.renderScale).toBe(1);
   });
 
+  it('reuses a sharp surface after a small zoom-out when it still covers the screen', () => {
+    const sharp = resolveDocumentRenderTarget(null, at(-10000, 2), layout, false);
+    const zoomedOut = resolveDocumentRenderTarget(sharp, at(-7500, 1.5), layout, false);
+    expect(zoomedOut).toBe(sharp);
+    const backIn = resolveDocumentRenderTarget(zoomedOut, at(-10000, 2), layout, true);
+    expect(backIn).toBe(sharp);
+  });
+
   it('never exceeds the native per-side pixel cap and stays inside the document', () => {
     for (const [translateY, scale] of [[0, 1], [-1e6, 1], [1e6, 3], [-50000, 5]] as const) {
       const target = resolveDocumentRenderTarget(null, at(translateY, scale), layout, false);
@@ -85,4 +93,29 @@ describe('continuous document render target', () => {
     for (const value of Object.values(first)) expect(Number.isFinite(value)).toBe(true);
     expect(resolveDocumentRenderTarget(first, transform, bad, false)).toBe(first);
   });
+});
+
+
+it('renders a four-page overview inside the native drawable cap', () => {
+  const target = resolveDocumentRenderTarget(null, { scale: 0.25, translateX: 0, translateY: 0,
+    containerWidth: 1024, containerHeight: 1366 },
+    { pageWidth: 1024, pageHeight: 1325, pageCount: 100, contentPadding: 0, pixelRatio: 2 }, false);
+  expect(target.renderScale).toBe(0.25);
+  expect(target.heightRatio * 132500 * target.renderScale * 2).toBeLessThanOrEqual(4000);
+  expect(target.heightRatio * 132500).toBeGreaterThan(4000);
+});
+import { nextDocumentPrewarmTarget } from '../documentRenderTarget';
+
+it('prewarms only a bounded next zoom level for the visible document', () => {
+  const current = { renderScale: 1, leftRatio: 0, topRatio: 0, widthRatio: 1, heightRatio: 1 };
+  const layout = { pageWidth: 600, pageHeight: 1000, pageCount: 2, contentPadding: 0, pixelRatio: 2 };
+  const viewport = { scale: 1, translateX: 0, translateY: 0, containerWidth: 600, containerHeight: 800 };
+  const next = nextDocumentPrewarmTarget(current, viewport, layout);
+  expect(next?.renderScale).toBe(1.5);
+  expect(next?.heightRatio).toBeCloseTo(0.4);
+  expect(nextDocumentPrewarmTarget({ ...current, renderScale: 5 }, viewport, layout)).toBeNull();
+  expect(nextDocumentPrewarmTarget(current, viewport, { ...layout, pixelRatio: 10 })).toBeNull();
+  expect(nextDocumentPrewarmTarget(current, null, layout)).toBeNull();
+  const ipad = { scale: 1, translateX: 0, translateY: 0, containerWidth: 820, containerHeight: 1180 };
+  expect(nextDocumentPrewarmTarget(current, ipad, { ...layout, pageWidth: 820, pageHeight: 1061, pageCount: 4 })?.renderScale).toBe(1.5);
 });

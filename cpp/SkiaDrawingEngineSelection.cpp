@@ -174,7 +174,9 @@ void SkiaDrawingEngine::pasteSelection(float offsetX, float offsetY) {
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
 
     auto commit = [this](StrokeDelta&& d) { commitDelta(std::move(d)); };
-    selection_->pasteSelection(strokes_, copiedStrokes_, offsetX, offsetY, commit);
+    auto copies = copiedStrokes_;
+    for (auto& stroke : copies) stroke.layerOrder = reserveLayerOrder();
+    selection_->pasteSelection(strokes_, copies, offsetX, offsetY, commit);
     markStrokeCachesDirty();
 }
 
@@ -461,7 +463,7 @@ void SkiaDrawingEngine::prepareSelectionDragCache() {
     if (highlightSurface) {
         canvas = highlightSurface->getCanvas();
         canvas->clear(SK_ColorTRANSPARENT);
-        selection_->renderSelection(canvas, strokes_, selectedIndices_);
+        selection_->renderSelection(canvas, strokes_, selectedIndices_, displayInkSwap_);
         selectionHighlightSnapshot_ = highlightSurface->makeImageSnapshot();
     }
 
@@ -494,6 +496,12 @@ void SkiaDrawingEngine::endSelectionDrag() {
     nonSelectedSnapshot_ = nullptr;
     selectedSnapshot_ = nullptr;
     selectionHighlightSnapshot_ = nullptr;
+    selectionDragLayers_.clear();
+    selectionDragIndices_.clear();
+    selectionDragCoverage_ = SkRect::MakeEmpty();
+    selectionDragContext_ = nullptr;
+    selectionDragScale_ = 0;
+    selectionDragEpoch_ = 0;
 }
 
 int SkiaDrawingEngine::getSelectionCount() const {

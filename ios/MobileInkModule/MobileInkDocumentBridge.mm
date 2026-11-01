@@ -44,6 +44,20 @@ ContinuousDocumentPage decodePage(NSString* payload) {
         }
         if (page.order.size() != page.strokes.size()) throw std::invalid_argument("Document stroke order count mismatch");
     }
+    id layerOrder = root[@"documentLayerOrder"];
+    if (layerOrder) {
+        if (![layerOrder isKindOfClass:NSArray.class] || [(NSArray*)layerOrder count] != page.strokes.size())
+            throw std::invalid_argument("Document layer order count mismatch");
+        for (size_t i = 0; i < page.strokes.size(); ++i) {
+            id value = layerOrder[i];
+            if (![value isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID())
+                throw std::invalid_argument("Invalid document layer order value");
+            double number = [value doubleValue];
+            if (!std::isfinite(number) || number < 0 || number >= 9007199254740991.0 || std::floor(number) != number)
+                throw std::invalid_argument("Invalid document layer order range");
+            page.strokes[i].layerOrder = static_cast<uint64_t>(number);
+        }
+    }
     return page;
 }
 NSString* encodePage(const ContinuousDocumentPage& page, bool includeOrder) {
@@ -60,16 +74,21 @@ NSString* encodePage(const ContinuousDocumentPage& page, bool includeOrder) {
         for (uint64_t value : page.order) [order addObject:@(value)];
         root[@"documentStrokeOrder"] = order;
     }
+    if (!page.strokes.empty()) {
+        NSMutableArray* layers = [NSMutableArray arrayWithCapacity:page.strokes.size()];
+        for (const auto& stroke : page.strokes) [layers addObject:@(stroke.layerOrder)];
+        root[@"documentLayerOrder"] = layers;
+    }
     NSError* error = nil;
-    NSData* json = [NSJSONSerialization dataWithJSONObject:root options:0 error:&error];
+    NSData* json = [NSJSONSerialization dataWithJSONObject:root options:NSJSONWritingSortedKeys error:&error];
     if (error || !json) throw std::runtime_error("Cannot encode document page");
     return [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
 }
 }
 
 @protocol MobileInkDocumentLoader <NSObject>
-- (void)loadBase64Data:(NSNumber*)viewTag base64String:(NSString*)payload
-             callback:(RCTResponseSenderBlock)callback;
+- (void)loadPreparedDrawing:(NSNumber*)viewTag snapshot:(void*)snapshot
+                   callback:(RCTResponseSenderBlock)callback;
 // Main thread only; returns an owned std::vector<Stroke>* or NULL.
 - (void*)takeDrawingSnapshot:(NSNumber*)viewTag;
 @end
@@ -101,8 +120,8 @@ RCT_EXPORT_METHOD(composeDocument:(NSArray<NSString*>*)payloads
         reject(@"DOCUMENT_COMPOSE_FAILED", @"Unable to process drawing data", nil);
     }
 }
-// Compose off the UI thread, then reuse the canvas's confirmed asynchronous load.
-// The combined payload never becomes a JavaScript string.
+// Decode and compose off the UI thread, then swap the prepared geometry on the
+// main queue. No combined JSON/base64 encoding or second decode is necessary.
 RCT_EXPORT_METHOD(loadDocument:(nonnull NSNumber*)viewTag
                   payloads:(NSArray<NSString*>*)payloads
                   pageHeight:(double)pageHeight
@@ -112,26 +131,27 @@ RCT_EXPORT_METHOD(loadDocument:(nonnull NSNumber*)viewTag
         std::vector<nativedrawing::ContinuousDocumentPage> pages;
         pages.reserve(payloads.count);
         for (NSString* payload in payloads) pages.push_back(decodePage(payload));
-        nativedrawing::ContinuousDocumentPage document;
-        document.strokes = nativedrawing::composeContinuousDocument(pages, pageHeight);
-        NSString* payload = encodePage(document, false);
+        auto* prepared = new std::vector<nativedrawing::Stroke>(
+            nativedrawing::composeContinuousDocument(pages, pageHeight));
         dispatch_async(dispatch_get_main_queue(), ^{
             id<MobileInkDocumentLoader> loader = (id)[self.bridge moduleForName:@"MobileInkCanvasViewManager"];
-            if (![loader respondsToSelector:@selector(loadBase64Data:base64String:callback:)]) {
+            if (![loader respondsToSelector:@selector(loadPreparedDrawing:snapshot:callback:)]) {
                 reject(@"DOCUMENT_LOAD_UNAVAILABLE", @"MobileInkCanvasViewManager is unavailable", nil);
-                return;
+            } else {
+                [loader loadPreparedDrawing:viewTag snapshot:prepared callback:^(NSArray* result) {
+                    id error = result.count > 0 ? result[0] : nil;
+                    if ([error isKindOfClass:NSString.class]) {
+                        reject(@"DOCUMENT_LOAD_FAILED", error, nil);
+                    } else {
+                        resolve(@(result.count > 1 && [result[1] isKindOfClass:NSNumber.class] && [result[1] boolValue]));
+                    }
+                }];
             }
-            [loader loadBase64Data:viewTag base64String:payload callback:^(NSArray* result) {
-                id error = result.count > 0 ? result[0] : nil;
-                if ([error isKindOfClass:NSString.class]) {
-                    // A just-mounted React view can become ready before its tag
-                    // is registered. The caller retries false, never treats it as loaded.
-                    if ([error isEqual:@"View not found"]) resolve(@NO);
-                    else reject(@"DOCUMENT_LOAD_FAILED", error, nil);
-                } else {
-                    resolve(@(result.count > 1 && [result[1] isKindOfClass:NSNumber.class] && [result[1] boolValue]));
-                }
-            }];
+            // Swapping puts the old strokes into prepared. Release those on the
+            // background queue, including when a view disappeared before handoff.
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                delete prepared;
+            });
         });
     } catch (const std::exception& error) {
         reject(@"DOCUMENT_LOAD_FAILED", [NSString stringWithUTF8String:error.what()], nil);
@@ -193,6 +213,35 @@ RCT_EXPORT_METHOD(partitionDocument:(NSString*)payload
         reject(@"DOCUMENT_PARTITION_FAILED", [NSString stringWithUTF8String:error.what()], nil);
     } catch (...) {
         reject(@"DOCUMENT_PARTITION_FAILED", @"Unable to process drawing data", nil);
+    }
+}
+RCT_EXPORT_METHOD(splitProjectedPageByLayers:(NSString*)payload
+                  boundaries:(NSArray<NSNumber*>*)boundaries
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+    try {
+        const auto page = decodePage(payload);
+        std::vector<uint64_t> orders;
+        for (id value in boundaries) {
+            if (![value isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID())
+                throw std::invalid_argument("Invalid layer boundary");
+            const double number = [value doubleValue];
+            if (!std::isfinite(number) || number < 0 || number >= 9007199254740991.0 || std::floor(number) != number)
+                throw std::invalid_argument("Invalid layer boundary");
+            orders.push_back(static_cast<uint64_t>(number));
+        }
+        const auto groups = nativedrawing::splitStrokesByLayer(page.strokes, orders);
+        NSMutableArray* result = [NSMutableArray arrayWithCapacity:groups.size()];
+        for (const auto& strokes : groups) {
+            nativedrawing::ContinuousDocumentPage group;
+            group.strokes = strokes;
+            [result addObject:encodePage(group, false)];
+        }
+        resolve(result);
+    } catch (const std::exception& error) {
+        reject(@"DOCUMENT_LAYER_SPLIT_FAILED", [NSString stringWithUTF8String:error.what()], nil);
+    } catch (...) {
+        reject(@"DOCUMENT_LAYER_SPLIT_FAILED", @"Unable to split document layers", nil);
     }
 }
 RCT_EXPORT_METHOD(projectDocumentPages:(NSArray<NSString*>*)payloads

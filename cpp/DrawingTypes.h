@@ -3,12 +3,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <memory>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include <include/core/SkPaint.h>
 #include <include/core/SkPath.h>
+#include <include/core/SkImage.h>
 
 namespace nativedrawing {
 
@@ -29,7 +31,32 @@ struct EraserCircle {
     float radius;
 };
 
+// Image geometry is in document pixels, in the same space as ink. Images are
+// runtime resources; their source and geometry remain owned by the host app.
+class AnimatedImageSource {
+public:
+    virtual ~AnimatedImageSource() = default;
+    // -1 means decoding failed, 0 means unchanged, 1 means a new frame.
+    virtual int frameAt(double time, size_t currentFrame, size_t& nextFrame, sk_sp<SkImage>& image) = 0;
+};
+
+struct ImageLayer {
+    std::string id;
+    uint64_t layerOrder = 0;
+    bool hidden = false;
+    sk_sp<SkImage> image;
+    std::shared_ptr<AnimatedImageSource> animation;
+    size_t animationFrame = 0;
+    bool animationVisible = true;
+    SkRect bounds = SkRect::MakeEmpty();
+    SkRect crop = SkRect::MakeWH(1, 1);
+    float rotation = 0;
+    float cornerRadius = 4;
+};
+
 struct Stroke {
+    // Legacy ink precedes legacy overlays; new edits receive a higher order.
+    uint64_t layerOrder = 1;
     std::vector<Point> points;
     SkPaint paint;
     SkPath path;
@@ -47,6 +74,7 @@ struct Stroke {
     // OPTIMIZATION: Cached eraser path for O(1) rendering instead of O(n) path ops per frame
     mutable SkPath cachedEraserPath;      // Union of all erasedBy circles
     mutable size_t cachedEraserCount = 0; // Track when to rebuild cache
+    mutable bool cachedEraserOptimized = false; // Derived only; never serialized
 
     // OPTIMIZATION: Cached visibility for O(1) selection instead of O(m*k) per frame
     mutable bool cachedHasVisiblePoints = true;  // True if any point is outside all eraser circles
@@ -63,9 +91,9 @@ struct Stroke {
 // Zoom range the engine renders at. setRenderViewport clamps and buckets
 // into this range; ActiveStrokeRenderer anchors its preview surface with
 // the same bounds so the two never diverge.
-constexpr float kMinimumRenderScale = 1.0f;
+constexpr float kMinimumRenderScale = 0.25f;
 constexpr float kMaximumRenderScale = 5.0f;
-// Scales at or below this render 1:1; above it the scale-aware paths kick in.
+// Upper tolerance for identity rendering. Overview scales use scale-aware paths.
 constexpr float kIdentityRenderScaleThreshold = 1.01f;
 
 // Delta-based history. Each entry describes ONE operation that was

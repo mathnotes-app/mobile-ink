@@ -46,6 +46,16 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
 
     // Tool state tracking
     private var currentToolType: String = "pen"
+    private var activeStrokeTool: String? = null
+    var holdToShapeEnabled: Boolean = true
+        set(value) {
+            field = value
+            if (!value) cancelHoldToShapePreview()
+            queueEvent {
+                if (drawingEngine != 0L) setHoldToShapeEnabledNative(drawingEngine, value)
+            }
+            requestInkRender()
+        }
     private var currentEraserMode: String = "pixel"
     private var currentStrokeWidth: Float = 3f
     private var currentStrokeColor: Int = android.graphics.Color.BLACK
@@ -74,6 +84,12 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     // When "pencilonly", only stylus touches are processed for drawing
     var drawingPolicy: String = "default"
     var renderBackend: String = "ganesh"
+    @Volatile var displayAppearance: String = "light"
+        set(value) {
+            if (field == value) return
+            field = value
+            requestInkRender()
+        }
     var continuousDocument: Boolean = false
         set(value) {
             if (field == value) return
@@ -85,7 +101,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
             else surfaceTexture?.let { if (isAvailable) configureAvailableTexture(it, width, height) }
         }
     private val effectiveRenderScale: Float
-        get() = floatArrayOf(1f, 1.5f, 2f, 2.5f, 3f, 4f, 5f).minByOrNull { kotlin.math.abs(it - renderScale) } ?: 1f
+        get() = floatArrayOf(0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 2.5f, 3f, 4f, 5f).minByOrNull { kotlin.math.abs(it - renderScale) } ?: 1f
 
     private fun continuousViewport(w: Int = width, h: Int = height): RectF {
         val left = renderViewportLeftRatio * w
@@ -108,7 +124,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
 
     var renderScale: Float = 1f
         set(value) {
-            val clamped = value.takeIf { it.isFinite() }?.coerceIn(1f, 5f) ?: 1f
+            val clamped = value.takeIf { it.isFinite() }?.coerceIn(0.25f, 5f) ?: 1f
             if (field == clamped) return
             field = clamped
             surfaceTexture?.let { texture ->
@@ -428,6 +444,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         }
 
         drawingEngine = createDrawingEngine(width, height, continuousDocument)
+        if (drawingEngine != 0L) setHoldToShapeEnabledNative(drawingEngine, holdToShapeEnabled)
         engineWidth = width
         engineHeight = height
 
@@ -456,7 +473,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         if (!makeRenderContextCurrent()) {
             return
         }
-        if (renderGaneshToCurrentSurface(engine, renderWidth, renderHeight)) {
+        if (renderGaneshToCurrentSurface(engine, renderWidth, renderHeight, displayAppearance == "dark")) {
             EGL14.eglSwapBuffers(eglDisplay, eglSurface)
         }
     }
@@ -479,9 +496,9 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         )
 
         val actualRenderScale = if (continuousDocument) effectiveRenderScale else if (renderWidth > 0 && engineWidth > 0) {
-            (renderWidth.toFloat() / engineWidth.toFloat()).coerceIn(1f, 5f)
+            (renderWidth.toFloat() / engineWidth.toFloat()).coerceIn(0.25f, 5f)
         } else {
-            renderScale.coerceIn(1f, 5f)
+            renderScale.coerceIn(0.25f, 5f)
         }
 
         val continuous = if (continuousDocument) continuousViewport(engineWidth, engineHeight) else null
@@ -650,10 +667,10 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     }
 
     private fun canPreviewHoldToShape(): Boolean {
-        return currentToolType == "pen" ||
+        return holdToShapeEnabled && (currentToolType == "pen" ||
             currentToolType == "pencil" ||
             currentToolType == "marker" ||
-            currentToolType == "calligraphy"
+            currentToolType == "calligraphy")
     }
 
     private fun scheduleHoldToShapePreview() {
@@ -847,6 +864,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                activeStrokeTool = currentToolType
                 // For select tool, check if tapping inside existing selection to move it
                 if (currentToolType == "select" && drawingEngine != 0L) {
                     val selectionCount = getSelectionCount()
@@ -1047,8 +1065,11 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
                 }
                 requestInkRender()
                 if (currentToolType != "select") {
-                    sendEvent("onDrawingChange", Arguments.createMap())
+                    val payload = Arguments.createMap()
+                    if (!isCancel && activeStrokeTool != null) payload.putString("completedStrokeTool", activeStrokeTool)
+                    sendEvent("onDrawingChange", payload)
                 }
+                activeStrokeTool = null
             }
         }
 
@@ -1372,7 +1393,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
 
     fun deserializeDrawing(data: ByteArray): Boolean {
         val success = runOnGlThreadSync {
-            if (drawingEngine != 0L) { deserializeDrawing(drawingEngine, data); true } else false
+            if (drawingEngine != 0L) deserializeDrawing(drawingEngine, data) else false
         } ?: false
         if (success) {
             resetTransientInteractionState()
@@ -1456,6 +1477,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     private external fun touchMoved(engine: Long, x: Float, y: Float, pressure: Float, azimuth: Float, altitude: Float, timestamp: Long, isStylusInput: Boolean)
     private external fun touchEnded(engine: Long, timestamp: Long)
     private external fun updateHoldShapePreview(engine: Long, timestamp: Long): Boolean
+    private external fun setHoldToShapeEnabledNative(engine: Long, enabled: Boolean)
 
     // Canvas operations
     private external fun clearDocumentPageNative(engine: Long, pageIndex: Int, pageHeight: Float): Boolean
@@ -1499,10 +1521,10 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     private external fun snapshotDrawing(engine: Long): Long
     private external fun serializeDrawingSnapshot(snapshot: Long): ByteArray?
     private external fun freeDrawingSnapshot(snapshot: Long)
-    private external fun deserializeDrawing(engine: Long, data: ByteArray)
+    private external fun deserializeDrawing(engine: Long, data: ByteArray): Boolean
 
     // Rendering
-    private external fun renderGaneshToCurrentSurface(engine: Long, width: Int, height: Int): Boolean
+    private external fun renderGaneshToCurrentSurface(engine: Long, width: Int, height: Int, dark: Boolean): Boolean
     private external fun releaseGaneshContext(engine: Long)
     private external fun renderToPixelsScaled(engine: Long, bitmap: Bitmap, scale: Float)
 

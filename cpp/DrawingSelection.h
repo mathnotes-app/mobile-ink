@@ -85,7 +85,8 @@ public:
     void renderSelection(
         SkCanvas* canvas,
         const std::vector<Stroke>& strokes,
-        const std::unordered_set<size_t>& selectedIndices
+        const std::unordered_set<size_t>& selectedIndices,
+        bool inkChannelsSwapped = false
     );
 
     // Utility functions
