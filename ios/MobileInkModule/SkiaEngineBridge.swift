@@ -29,6 +29,9 @@ func touchMoved(_ engine: OpaquePointer, _ x: Float, _ y: Float, _ pressure: Flo
 @_silgen_name("touchEnded")
 func touchEnded(_ engine: OpaquePointer, _ timestamp: Int64)
 
+@_silgen_name("cancelLasso")
+func cancelLasso(_ engine: OpaquePointer)
+
 @_silgen_name("updateHoldShapePreview")
 func updateHoldShapePreview(_ engine: OpaquePointer, _ timestamp: Int64) -> Bool
 @_silgen_name("setHoldToShapeEnabled")

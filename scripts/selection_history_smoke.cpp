@@ -205,6 +205,25 @@ void externalHistoryIsBoundedAndRejectsInvalidCommits() {
   check(!engine.canRedo(), "redo stack exhausted exactly once");
 }
 
+void cancelledLassoAllowsOverlayHistory() {
+  SkiaDrawingEngine engine(820, 1061);
+  drawStroke(engine, 200.0f);
+  const auto beforeInk = engine.serializeDrawing();
+  engine.setTool("select");
+  engine.touchBegan(100, 100, 1);
+  check(!engine.commitExternalEdit("before", "after"), "an active lasso blocks concurrent overlay edits");
+  engine.cancelLasso();
+  check(engine.commitExternalEdit("before", "after"), "a cancelled lasso permits overlay history");
+  check(engine.undo() == "before", "overlay edit remains undoable after cancellation");
+  check(engine.serializeDrawing() == beforeInk, "cancelling a lasso preserves ink");
+  engine.cancelLasso();
+  engine.setTool("pen");
+  engine.touchBegan(50, 50, 1);
+  engine.cancelLasso();
+  check(!engine.commitExternalEdit("before2", "after2"), "cancelling an inactive lasso does not end a pen stroke");
+  engine.touchEnded();
+}
+
 }  // namespace
 
 int main() {
@@ -216,6 +235,7 @@ int main() {
   objectEraseDropsLiveSelection();
   externalEditsShareInkHistory();
   externalHistoryIsBoundedAndRejectsInvalidCommits();
+  cancelledLassoAllowsOverlayHistory();
 
   if (g_failures == 0) {
     std::cout << "Selection history smoke tests passed" << std::endl;

@@ -369,6 +369,10 @@ void touchEnded(void* engine, long timestamp) {
     }
 }
 
+void cancelLasso(void* engine) {
+    if (engine) static_cast<SkiaDrawingEngine*>(engine)->cancelLasso();
+}
+
 bool updateHoldShapePreview(void* engine, long timestamp) {
     if (!engine) {
         return false;
