@@ -111,6 +111,7 @@ class MobileInkCanvasView: MTKView {
 
     private func startZoomPreparation(_ revision: UInt64) {
         guard !isReleased, continuousDocument, useExperimentalGaneshBackend, hasPresentedFrame,
+              activeStrokeTool == nil, !isMovingSelection, !isTransformingSelection, !isDraggingSelection,
               revision == zoomPreparationRevision, !zoomPreparationInFlight,
               let engine = drawingEngine, let json = zoomPreparationTarget,
               let data = json.data(using: .utf8),
@@ -135,6 +136,11 @@ class MobileInkCanvasView: MTKView {
     private func advanceZoomPreparation(_ snapshot: UnsafeMutableRawPointer, revision: UInt64, json: String) {
         MobileInkZoomTileWorker.render(snapshot) { [weak self] result in
             guard let self else { releaseZoomTileSnapshot(snapshot); return }
+            if self.activeStrokeTool != nil || self.isMovingSelection || self.isTransformingSelection || self.isDraggingSelection {
+                releaseZoomTileSnapshot(snapshot)
+                self.zoomPreparationInFlight = false
+                return
+            }
             guard !self.isReleased, let engine = self.drawingEngine,
                   revision == self.zoomPreparationRevision else {
                 releaseZoomTileSnapshot(snapshot)
@@ -1252,6 +1258,7 @@ class MobileInkCanvasView: MTKView {
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let engine = drawingEngine, let touch = touches.first else { return }
+        defer { if viewportMotionActive && activeStrokeTool == nil { scheduleZoomPreparation() } }
 
         // Don't process touches when in text mode
         if isTextMode {
@@ -1338,6 +1345,7 @@ class MobileInkCanvasView: MTKView {
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let engine = drawingEngine, let touch = touches.first else { return }
+        defer { if viewportMotionActive && activeStrokeTool == nil { scheduleZoomPreparation() } }
         let cancelledTool = activeStrokeTool
         activeStrokeTool = nil
 
