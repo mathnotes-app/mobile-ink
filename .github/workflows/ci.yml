@@ -54,6 +54,9 @@ jobs:
       - name: Check display-only ink and image contrast
         run: npm run test:native:display-appearance-smoke
 
+      - name: Check lined paper spacing
+        run: npm run test:native:background-spacing
+
       - name: Verify background GPU preparation and CPU/GPU color parity
         run: npm run test:native:ganesh-preparation-smoke
 

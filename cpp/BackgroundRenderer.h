@@ -48,7 +48,7 @@ private:
     static const SkColor LIGHT_MAJOR_GRID_COLOR;
 
     // Individual pattern renderers
-    void drawLinedBackground(SkCanvas* canvas, float w, float h, float verticalPatternOffset);
+    void drawLinedBackground(SkCanvas* canvas, float w, float h, float verticalPatternOffset, float targetSpacing);
     void drawGridBackground(SkCanvas* canvas, float w, float h, float verticalPatternOffset);
     void drawDottedBackground(SkCanvas* canvas, float w, float h, float verticalPatternOffset);
     void drawGraphBackground(SkCanvas* canvas, float w, float h, float verticalPatternOffset);

@@ -92,8 +92,11 @@ void BackgroundRenderer::drawBackground(
         return;
     }
 
-    if (backgroundType == "lined") {
-        drawLinedBackground(canvas, w, h, verticalPatternOffset);
+    if (backgroundType == "lined" || backgroundType == "lined-narrow" || backgroundType == "lined-compact") {
+        const float pageHeight = resolveSinglePageHeight(w, h);
+        const float spacing = backgroundType == "lined-narrow" ? pageHeight / 24.0f
+                            : backgroundType == "lined-compact" ? pageHeight / 36.0f : LINE_SPACING;
+        drawLinedBackground(canvas, w, h, verticalPatternOffset, spacing);
     } else if (backgroundType == "grid") {
         drawGridBackground(canvas, w, h, verticalPatternOffset);
     } else if (backgroundType == "dotted") {
@@ -108,9 +111,10 @@ void BackgroundRenderer::drawLinedBackground(
     SkCanvas* canvas,
     float w,
     float h,
-    float verticalPatternOffset
+    float verticalPatternOffset,
+    float targetSpacing
 ) {
-    const float lineSpacing = resolvePatternSpacing(w, h, LINE_SPACING);
+    const float lineSpacing = resolvePatternSpacing(w, h, targetSpacing);
 
     SkPaint linePaint;
     linePaint.setColor(LIGHT_LINE_COLOR);

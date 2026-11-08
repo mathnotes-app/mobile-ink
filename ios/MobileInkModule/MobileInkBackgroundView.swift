@@ -197,7 +197,7 @@ class MobileInkBackgroundView: UIView {
 
     // Draw pattern based on type
     switch backgroundType {
-    case "lined":
+    case "lined", "lined-narrow", "lined-compact":
       drawLinedBackground(in: context, rect: rect, dark: dark)
     case "grid":
       drawGridBackground(in: context, rect: rect, dark: dark)
@@ -267,7 +267,10 @@ class MobileInkBackgroundView: UIView {
     }
     context.setLineWidth(1.0)
 
-    let lineSpacing = resolvedPatternSpacing(for: rect)
+    let pageHeight = resolvedSinglePageHeight(for: rect)
+    let targetSpacing: CGFloat = backgroundType == "lined-narrow" ? pageHeight / 24 :
+      backgroundType == "lined-compact" ? pageHeight / 36 : Self.targetPatternSpacing
+    let lineSpacing = resolvedPatternSpacing(for: rect, targetSpacing: targetSpacing)
     let numberOfLines = Int(ceil(rect.height / lineSpacing)) + 1
 
     for i in 0...numberOfLines {
@@ -459,7 +462,7 @@ class MobileInkBackgroundView: UIView {
 
     // Draw pattern based on type
     switch backgroundType {
-    case "lined":
+    case "lined", "lined-narrow", "lined-compact":
       drawLinedBackground(in: context, rect: rect, dark: dark)
     case "grid":
       drawGridBackground(in: context, rect: rect, dark: dark)
