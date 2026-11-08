@@ -1,6 +1,6 @@
 {
   "name": "@mathnotes/mobile-ink",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "description": "Production-grade React Native ink engine with native Skia drawing and continuous canvas primitives.",
   "license": "Apache-2.0",
   "author": "BuilderPro LLC",
@@ -59,6 +59,7 @@
     "benchmark:native:continuous": "clang++ -O2 -std=c++20 -fobjc-arc scripts/continuous_document_benchmark.mm cpp/*.cpp -I cpp -I node_modules/@shopify/react-native-skia/cpp/skia -I node_modules/@shopify/react-native-skia/cpp/skia/modules/pathops/include node_modules/@shopify/react-native-skia/libs/apple/libskia.xcframework/macos-arm64_x86_64/libskia.a node_modules/@shopify/react-native-skia/libs/apple/libpathops.xcframework/macos-arm64_x86_64/libpathops.a -framework Metal -framework ApplicationServices -framework CoreFoundation -framework CoreGraphics -framework CoreText -framework Foundation -framework QuartzCore -o /tmp/mobile_ink_continuous_document_benchmark && /tmp/mobile_ink_continuous_document_benchmark",
     "test:native:document-jni": "bash scripts/test-document-jni.sh",
     "test:native:heartbeat-smoke": "swiftc -swift-version 5 ios/MobileInkModule/MobileInkBenchmarkRecorder.swift scripts/benchmark_recorder_smoke.swift -o /tmp/mobile_ink_heartbeat_smoke && /tmp/mobile_ink_heartbeat_smoke",
+    "test:native:background-spacing": "clang++ -std=c++20 scripts/background_spacing_smoke.cpp cpp/BackgroundRenderer.cpp -I cpp -I node_modules/@shopify/react-native-skia/cpp/skia node_modules/@shopify/react-native-skia/libs/apple/libskia.xcframework/macos-arm64_x86_64/libskia.a -framework ApplicationServices -framework CoreFoundation -framework CoreGraphics -framework CoreText -framework Foundation -framework QuartzCore -o /tmp/mobile_ink_background_spacing_smoke && /tmp/mobile_ink_background_spacing_smoke",
     "test:native:ganesh-preparation-smoke": "clang++ -O2 -std=c++20 -fobjc-arc scripts/ganesh_preparation_smoke.mm ios/MobileInkModule/MobileInkGaneshWarmup.mm ios/MobileInkModule/MobileInkBridge.mm cpp/*.cpp -I . -I cpp -I node_modules/@shopify/react-native-skia/cpp/skia -I node_modules/@shopify/react-native-skia/cpp/skia/modules/pathops/include node_modules/@shopify/react-native-skia/libs/apple/libskia.xcframework/macos-arm64_x86_64/libskia.a node_modules/@shopify/react-native-skia/libs/apple/libpathops.xcframework/macos-arm64_x86_64/libpathops.a -framework Metal -framework ApplicationServices -framework CoreFoundation -framework CoreGraphics -framework CoreText -framework Foundation -framework QuartzCore -o /tmp/mobile_ink_ganesh_preparation_smoke && /tmp/mobile_ink_ganesh_preparation_smoke",
     "test:native:phased-audit-smoke": "swiftc -swift-version 5 ios/MobileInkModule/MobileInkBenchmarkRecorder.swift ios/MobileInkModule/MobileInkInteractionAudit.swift scripts/phased_audit_smoke.swift -o /tmp/mobile_ink_phased_audit_smoke && /tmp/mobile_ink_phased_audit_smoke",
     "test:native:frame-acquisition-smoke": "swiftc -swift-version 5 ios/MobileInkModule/MobileInkFrameAcquisition.swift scripts/frame_acquisition_smoke.swift -o /tmp/mobile_ink_frame_acquisition_smoke && /tmp/mobile_ink_frame_acquisition_smoke",

@@ -141,6 +141,10 @@ export function Notebook() {
 - `ZoomableInkViewport`: production pinch, pan, momentum, focal-point zoom, and Apple Pencil/finger gesture routing.
 - `ContinuousEnginePool`: fixed-size native canvas pool for continuous notebooks.
 - `InfiniteInkCanvas`: full vertical continuous notebook shell with pooled native engines, trailing page creation, dirty-page serialization, zoom, momentum scroll, and generic page backgrounds.
+
+For lined paper, `backgroundType` accepts `lined` (the original spacing),
+`lined-narrow`, or `lined-compact`. The same patterns are used for live paper
+and native page exports. Existing `lined` documents retain their spacing.
 - Native bridge helpers for page export, native notebook body parse, and continuous-window compose/decompose.
 - Pure utilities for continuous coordinates, engine-pool range calculation, notebook serialization, and page growth.
 

@@ -2,6 +2,10 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [0.3.12] - 2026-11-08
+
+- Add narrow and extra-narrow lined paper for live drawing and native export, preserving the existing lined-paper spacing.
+
 ## [0.3.11] - 2026-11-01
 
 - Clear a cancelled lasso's transient input state so subsequent image and text edits can be recorded and undone.
