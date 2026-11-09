@@ -199,6 +199,8 @@ class MobileInkBackgroundView: UIView {
     switch backgroundType {
     case "lined", "lined-narrow", "lined-compact":
       drawLinedBackground(in: context, rect: rect, dark: dark)
+    case let type where Self.customLineCount(type) != nil:
+      drawLinedBackground(in: context, rect: rect, dark: dark)
     case "grid":
       drawGridBackground(in: context, rect: rect, dark: dark)
     case "dotted":
@@ -259,6 +261,14 @@ class MobileInkBackgroundView: UIView {
     return singlePageHeight / CGFloat(max(1, adjustedLineCount))
   }
 
+  private static func customLineCount(_ type: String) -> Int? {
+    let prefix = "lined-custom-"
+    guard type.hasPrefix(prefix) else { return nil }
+    let suffix = String(type.dropFirst(prefix.count))
+    guard suffix.count == 2, let count = Int(suffix), (12...60).contains(count), String(count) == suffix else { return nil }
+    return count
+  }
+
   private func drawLinedBackground(in context: CGContext, rect: CGRect, dark: Bool) {
     if dark {
       context.setStrokeColor(UIColor(red: 0.30, green: 0.30, blue: 0.30, alpha: 1.0).cgColor)
@@ -268,8 +278,9 @@ class MobileInkBackgroundView: UIView {
     context.setLineWidth(1.0)
 
     let pageHeight = resolvedSinglePageHeight(for: rect)
-    let targetSpacing: CGFloat = backgroundType == "lined-narrow" ? pageHeight / 24 :
-      backgroundType == "lined-compact" ? pageHeight / 36 : Self.targetPatternSpacing
+    let targetSpacing: CGFloat = Self.customLineCount(backgroundType).map { pageHeight / CGFloat($0) } ??
+      (backgroundType == "lined-narrow" ? pageHeight / 24 :
+      backgroundType == "lined-compact" ? pageHeight / 36 : Self.targetPatternSpacing)
     let lineSpacing = resolvedPatternSpacing(for: rect, targetSpacing: targetSpacing)
     let numberOfLines = Int(ceil(rect.height / lineSpacing)) + 1
 
@@ -463,6 +474,8 @@ class MobileInkBackgroundView: UIView {
     // Draw pattern based on type
     switch backgroundType {
     case "lined", "lined-narrow", "lined-compact":
+      drawLinedBackground(in: context, rect: rect, dark: dark)
+    case let type where Self.customLineCount(type) != nil:
       drawLinedBackground(in: context, rect: rect, dark: dark)
     case "grid":
       drawGridBackground(in: context, rect: rect, dark: dark)

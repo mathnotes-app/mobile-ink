@@ -70,6 +70,15 @@ float resolvePatternSpacing(
     return singlePageHeight / static_cast<float>(std::max(1, adjustedLineCount));
 }
 
+int customLineCount(const std::string& type) {
+    static const std::string prefix = "lined-custom-";
+    if (type.compare(0, prefix.size(), prefix) != 0 || type.size() != prefix.size() + 2) return 0;
+    const char tens = type[prefix.size()], ones = type[prefix.size() + 1];
+    if (tens < '0' || tens > '9' || ones < '0' || ones > '9') return 0;
+    const int count = (tens - '0') * 10 + (ones - '0');
+    return count >= 12 && count <= 60 ? count : 0;
+}
+
 } // namespace
 
 void BackgroundRenderer::drawBackground(
@@ -92,9 +101,11 @@ void BackgroundRenderer::drawBackground(
         return;
     }
 
-    if (backgroundType == "lined" || backgroundType == "lined-narrow" || backgroundType == "lined-compact") {
+    const int customLines = customLineCount(backgroundType);
+    if (backgroundType == "lined" || backgroundType == "lined-narrow" || backgroundType == "lined-compact" || customLines) {
         const float pageHeight = resolveSinglePageHeight(w, h);
-        const float spacing = backgroundType == "lined-narrow" ? pageHeight / 24.0f
+        const float spacing = customLines ? pageHeight / customLines
+                            : backgroundType == "lined-narrow" ? pageHeight / 24.0f
                             : backgroundType == "lined-compact" ? pageHeight / 36.0f : LINE_SPACING;
         drawLinedBackground(canvas, w, h, verticalPatternOffset, spacing);
     } else if (backgroundType == "grid") {
