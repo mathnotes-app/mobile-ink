@@ -91,28 +91,52 @@ export type PageBreaksProps = {
   displayAppearance?: InkDisplayAppearance;
   pages: NotebookPage[];
   pageHeight: number;
+  visiblePageIndex?: number;
+  viewportHeight?: number;
+  minimumScale?: number;
 };
+
+/** Include the entire viewport even at minimum zoom, plus several pages of pan runway. */
+export function pageBreakRange(pageCount: number, visiblePage: number | undefined,
+  pageHeight: number, viewportHeight: number | undefined, minimumScale: number | undefined) {
+  const last = Math.max(0, pageCount - 1);
+  if (visiblePage === undefined || viewportHeight === undefined || minimumScale === undefined ||
+      !Number.isFinite(visiblePage) || !Number.isFinite(viewportHeight) || viewportHeight <= 0 ||
+      !Number.isFinite(pageHeight) || pageHeight <= 0 || !Number.isFinite(minimumScale) || minimumScale <= 0) {
+    return { first: 1, last };
+  }
+  const center = Math.max(0, Math.min(last, Math.floor(visiblePage)));
+  const radius = Math.ceil(viewportHeight / (pageHeight * minimumScale)) + 4;
+  return { first: Math.max(1, center - radius), last: Math.min(last, center + radius + 1) };
+}
 
 export const PageBreaks = memo(function PageBreaks({
   displayAppearance = 'light',
   pages,
   pageHeight,
+  visiblePageIndex,
+  viewportHeight,
+  minimumScale,
 }: PageBreaksProps) {
+  const range = pageBreakRange(pages.length, visiblePageIndex, pageHeight, viewportHeight, minimumScale);
   return (
     <>
-      {pages.slice(1).map((page, pageIndex) => (
-        <View
-          key={`mobile-ink-page-break-${page.id}`}
-          testID={`ink-page-boundary-${pageIndex + 1}`}
-          collapsable={false}
-          pointerEvents="none"
-          style={[
-            styles.pageBreak,
-            displayAppearance === 'dark' && { backgroundColor: '#525252' },
-            { top: (pageIndex + 1) * pageHeight - StyleSheet.hairlineWidth / 2 },
-          ]}
-        />
-      ))}
+      {pages.slice(range.first, range.last + 1).map((page, offset) => {
+        const pageIndex = range.first + offset;
+        return (
+          <View
+            key={`mobile-ink-page-break-${page.id}`}
+            testID={`ink-page-boundary-${pageIndex}`}
+            collapsable={false}
+            pointerEvents="none"
+            style={[
+              styles.pageBreak,
+              displayAppearance === 'dark' && { backgroundColor: '#525252' },
+              { top: pageIndex * pageHeight - StyleSheet.hairlineWidth / 2 },
+            ]}
+          />
+        );
+      })}
     </>
   );
 });
