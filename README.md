@@ -143,7 +143,7 @@ export function Notebook() {
 - `InfiniteInkCanvas`: full vertical continuous notebook shell with pooled native engines, trailing page creation, dirty-page serialization, zoom, momentum scroll, and generic page backgrounds.
 
 For lined paper, `backgroundType` accepts `lined` (the original spacing),
-`lined-narrow`, or `lined-compact`. The same patterns are used for live paper
+`lined-narrow`, `lined-compact`, or `lined-custom-N` for an integer N from 12 to 60 lines per page. The same patterns are used for live paper
 and native page exports. Existing `lined` documents retain their spacing.
 - Native bridge helpers for page export, native notebook body parse, and continuous-window compose/decompose.
 - Pure utilities for continuous coordinates, engine-pool range calculation, notebook serialization, and page growth.

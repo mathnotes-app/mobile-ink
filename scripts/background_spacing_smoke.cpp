@@ -32,6 +32,9 @@ int main() {
             << " compact=" << compact << " plain=" << plain << '\n';
   const int narrow2x = countLines("lined-narrow", 2);
   const int compact2x = countLines("lined-compact", 2);
+  const int custom = countLines("lined-custom-47");
+  const int custom2x = countLines("lined-custom-47", 2);
   return standard > 0 && standard < narrow && narrow < compact && plain == 0 &&
-    narrow == narrow2x && compact == compact2x ? 0 : 1;
+    narrow == narrow2x && compact == compact2x && custom == 46 && custom == custom2x &&
+    countLines("lined-custom-99") == 0 && countLines("lined-custom-1x") == 0 ? 0 : 1;
 }
