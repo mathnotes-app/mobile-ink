@@ -26,9 +26,10 @@ Pod::Spec.new do |s|
     "CLANG_CXX_LIBRARY" => "libc++",
     "OTHER_LDFLAGS" => "$(inherited) -lc++",
     "GCC_PREPROCESSOR_DEFINITIONS" => "$(inherited) SK_METAL=1",
+    "GCC_ENABLE_CPP_RTTI" => "NO",
     "DEFINES_MODULE" => "YES"
   }
 
-  s.frameworks = "MetalKit", "Metal", "PDFKit", "CoreGraphics", "ImageIO", "UIKit"
+  s.frameworks = "MetalKit", "Metal", "PDFKit", "CoreGraphics", "CoreText", "ImageIO", "UIKit"
   s.libraries = "c++"
 end

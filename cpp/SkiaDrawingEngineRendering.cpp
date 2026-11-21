@@ -148,6 +148,23 @@ void SkiaDrawingEngine::renderStrokeGeometry(SkCanvas* canvas, const Stroke& str
     }
 }
 
+void SkiaDrawingEngine::renderExportStroke(SkCanvas* canvas, const Stroke& stroke) {
+    SkPaint paint = stroke.paint;
+    if (!stroke.isEraser) {
+        paint.setColor(swapRedBlueChannels(paint.getColor()));
+        paint.setAlpha(static_cast<uint8_t>(paint.getAlpha() * stroke.originalAlphaMod));
+    }
+    canvas->save();
+    if (!stroke.erasedBy.empty()) {
+        stroke.ensureEraserCacheValid();
+        if (!stroke.cachedEraserPath.isEmpty()) {
+            canvas->clipPath(stroke.cachedEraserPath, SkClipOp::kDifference);
+        }
+    }
+    renderStrokeGeometry(canvas, stroke, paint);
+    canvas->restore();
+}
+
 void SkiaDrawingEngine::redrawStrokes() {
     if (!needsStrokeRedraw_ || !strokeSurface_) return;
 
