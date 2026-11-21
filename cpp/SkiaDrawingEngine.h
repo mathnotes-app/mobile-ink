@@ -107,6 +107,8 @@ public:
 
     // Rendering
     void render(SkCanvas* canvas);
+    // Render a saved stroke using the same geometry as the live canvas.
+    void renderExportStroke(SkCanvas* canvas, const Stroke& stroke);
     // Render the configured visible rectangle into a viewport-sized target.
     void renderVisibleViewport(SkCanvas* canvas);
     void renderForExport(SkCanvas* canvas);

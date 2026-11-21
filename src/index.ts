@@ -95,3 +95,6 @@ export { getDocumentRenderViewport } from "./utils/documentViewport";
 export { resolveDocumentRenderTarget, MAX_NATIVE_RENDER_SCALE, type DocumentRenderTarget, type DocumentRenderLayout } from "./utils/documentRenderTarget";
 export { inkDisplayColor, INK_PAPER_COLORS, type InkDisplayAppearance } from './displayAppearance';
 export { resolveInkDisplayAppearance, supportsInkDisplayAppearance } from './native-ink-canvas/nativeModules';
+
+export { createPdfInkProjector, supportsVectorPdfExport, writeVectorPdf } from "./pdfExport";
+export type { VectorPdfLayer, VectorPdfPage } from "./pdfExport";
