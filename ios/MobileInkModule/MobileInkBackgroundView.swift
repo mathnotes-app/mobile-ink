@@ -1,4 +1,98 @@
 import UIKit
+import QuartzCore
+
+private func drawPdfPage(_ page: CGPDFPage, in context: CGContext, rect: CGRect) {
+  let pdfRect = page.getBoxRect(.mediaBox)
+  guard pdfRect.width > 0, pdfRect.height > 0 else { return }
+  let scale = min(rect.width / pdfRect.width, rect.height / pdfRect.height)
+  let offsetX = rect.minX + (rect.width - pdfRect.width * scale) / 2
+  let offsetY = rect.minY + (rect.height - pdfRect.height * scale) / 2
+  context.saveGState()
+  context.translateBy(x: offsetX - pdfRect.origin.x * scale,
+                      y: offsetY + pdfRect.height * scale + pdfRect.origin.y * scale)
+  context.scaleBy(x: scale, y: -scale)
+  context.drawPDFPage(page)
+  context.restoreGState()
+}
+
+private final class PdfTileSnapshot {
+  let pages: [CGPDFPage?]
+  let bounds: CGRect
+  let dark: Bool
+  init(pages: [CGPDFPage?], bounds: CGRect, dark: Bool) {
+    self.pages = pages
+    self.bounds = bounds
+    self.dark = dark
+  }
+}
+
+private final class PdfTiledLayer: CATiledLayer {
+  override class func fadeDuration() -> CFTimeInterval { 0 }
+}
+
+private final class PdfTiledView: UIView {
+  override class var layerClass: AnyClass { PdfTiledLayer.self }
+  private static let renderLock = NSLock()
+  private let snapshotLock = NSLock()
+  private var snapshot: PdfTileSnapshot?
+
+  override init(frame: CGRect) {
+    super.init(frame: frame)
+    configureTiles()
+  }
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+    configureTiles()
+  }
+
+  private func configureTiles() {
+    let tiles = layer as! CATiledLayer
+    tiles.tileSize = CGSize(width: 512, height: 512)
+    tiles.levelsOfDetail = 1
+    tiles.levelsOfDetailBias = 4
+    isOpaque = true
+    isUserInteractionEnabled = false
+    contentScaleFactor = UIScreen.main.scale
+  }
+  func update(pages: [CGPDFPage?], bounds: CGRect, dark: Bool) {
+    let next = PdfTileSnapshot(pages: pages, bounds: bounds, dark: dark)
+    snapshotLock.lock()
+    snapshot = next
+    snapshotLock.unlock()
+    layer.setNeedsDisplay()
+  }
+
+  func clear() {
+    snapshotLock.lock()
+    snapshot = nil
+    snapshotLock.unlock()
+  }
+
+  override func draw(_ rect: CGRect) {
+    guard let context = UIGraphicsGetCurrentContext() else { return }
+    snapshotLock.lock()
+    let current = snapshot
+    snapshotLock.unlock()
+    guard let current = current else { return }
+    // Serialize background tile rendering; the main thread never waits for it.
+    Self.renderLock.lock()
+    defer { Self.renderLock.unlock() }
+    context.setFillColor(UIColor.white.cgColor)
+    context.fill(rect)
+    let pageHeight = current.pages.count > 1 ? current.bounds.width * (11.0 / 8.5) : current.bounds.height
+    for (index, page) in current.pages.enumerated() {
+      guard let page = page else { continue }
+      let pageRect = CGRect(x: current.bounds.minX, y: current.bounds.minY + CGFloat(index) * pageHeight,
+                            width: current.bounds.width, height: pageHeight)
+      if pageRect.intersects(rect) { drawPdfPage(page, in: context, rect: pageRect) }
+    }
+    if current.dark {
+      context.setBlendMode(.difference)
+      context.setFillColor(UIColor(white: 0.85, alpha: 1).cgColor)
+      context.fill(rect)
+    }
+  }
+}
 
 private final class MobileInkPDFDocumentBox {
   let document: CGPDFDocument
@@ -84,12 +178,14 @@ class MobileInkBackgroundView: UIView {
   var backgroundType: String = "plain" {
     didSet {
       guard oldValue != backgroundType else { return }
+      refreshPdfTiles()
       setNeedsDisplay()
     }
   }
   var isDarkMode: Bool = false {
     didSet {
       guard oldValue != isDarkMode else { return }
+      refreshPdfTiles()
       setNeedsDisplay()
     }
   }
@@ -98,11 +194,13 @@ class MobileInkBackgroundView: UIView {
   private var pdfDocument: CGPDFDocument?
   private var pdfPage: CGPDFPage? {
     didSet {
+      refreshPdfTiles()
       setNeedsDisplay()
     }
   }
   private var windowPageNumbers: [Int] = [] {
     didSet {
+      refreshPdfTiles()
       setNeedsDisplay()
     }
   }
@@ -125,17 +223,40 @@ class MobileInkBackgroundView: UIView {
 
   // Callback for loading state changes
   var onLoadingStateChanged: ((Bool, Int?) -> Void)?
+  private let pdfTiles = PdfTiledView(frame: .zero)
 
   override init(frame: CGRect) {
     super.init(frame: frame)
     backgroundColor = .white
     isOpaque = true
+    addSubview(pdfTiles)
+    pdfTiles.isHidden = true
   }
 
   required init?(coder: NSCoder) {
     super.init(coder: coder)
     backgroundColor = .white
     isOpaque = true
+    addSubview(pdfTiles)
+    pdfTiles.isHidden = true
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    if pdfTiles.frame != bounds {
+      pdfTiles.frame = bounds
+      refreshPdfTiles()
+    }
+  }
+
+  private func refreshPdfTiles() {
+    let visible = backgroundType == "pdf"
+    pdfTiles.isHidden = !visible
+    guard visible else { pdfTiles.clear(); return }
+    let pages = windowPageNumbers.count > 1
+      ? windowPageNumbers.map { pageCache[$0] ?? pdfDocument?.page(at: $0) }
+      : [pdfPage]
+    pdfTiles.update(pages: pages, bounds: bounds, dark: isDarkMode)
   }
 
   /// Clear all PDF state (call when switching files)
@@ -208,20 +329,9 @@ class MobileInkBackgroundView: UIView {
     case "graph":
       drawGraphBackground(in: context, rect: rect, dark: dark)
     case "pdf":
-      if windowPageNumbers.count > 1 {
-        drawPDFWindowBackground(in: context, rect: rect)
-      } else if let pdfPage = pdfPage {
-        drawPDFBackground(in: context, rect: rect, pdfPage: pdfPage)
-      }
+      break // The tiled child renders visible PDF regions at the zoom scale.
     default:
       break // plain - just background color
-    }
-    if dark && backgroundType == "pdf" {
-      context.saveGState()
-      context.setBlendMode(.difference)
-      context.setFillColor(UIColor(white: 0.85, alpha: 1).cgColor)
-      context.fill(rect)
-      context.restoreGState()
     }
   }
 
@@ -413,29 +523,7 @@ class MobileInkBackgroundView: UIView {
   // MARK: - PDF Rendering
 
   private func drawPDFBackground(in context: CGContext, rect: CGRect, pdfPage: CGPDFPage) {
-    context.saveGState()
-
-    let pdfRect = pdfPage.getBoxRect(.mediaBox)
-
-    guard pdfRect.width > 0 && pdfRect.height > 0 else {
-      context.restoreGState()
-      return
-    }
-
-    let scaleX = rect.width / pdfRect.width
-    let scaleY = rect.height / pdfRect.height
-    let scale = min(scaleX, scaleY)
-    let scaledWidth = pdfRect.width * scale
-    let scaledHeight = pdfRect.height * scale
-    let offsetX = rect.minX + (rect.width - scaledWidth) / 2
-    let offsetY = rect.minY + (rect.height - scaledHeight) / 2
-
-    context.translateBy(x: offsetX - pdfRect.origin.x * scale,
-                        y: offsetY + scaledHeight + pdfRect.origin.y * scale)
-    context.scaleBy(x: scale, y: -scale)
-    context.drawPDFPage(pdfPage)
-
-    context.restoreGState()
+    drawPdfPage(pdfPage, in: context, rect: rect)
   }
 
   private func drawPDFWindowBackground(in context: CGContext, rect: CGRect) {

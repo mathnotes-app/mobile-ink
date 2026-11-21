@@ -2,6 +2,10 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [0.3.14] - 2026-11-19
+
+- Render iOS PDF backgrounds in bounded, zoom-aware tiles so detailed vector documents remain legible at higher magnifications.
+
 ## [0.3.13] - 2026-11-08
 
 - Support custom ruled spacing from 12 through 60 lines per page for live paper and native export.
